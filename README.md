@@ -19,6 +19,7 @@ data/
   processed_data/  # tablas generadas por el procesamiento
 reports/
   revision_tramos/ # hojas de contacto para revisión visual
+  hitos/           # hojas semanales y diarias para identificar hitos de la obra
 src/               # scripts de procesamiento, en orden numérico
 ```
 
@@ -31,6 +32,7 @@ python src/01_inventario.py        # inventario y calidad de cada foto
 python src/02_tramos_encuadre.py   # tramos de encuadre fijo y días que muestran la obra
 python src/03_orientacion.py       # orientación detectada de cada foto (después de 02)
 python src/04_fotos_utilizables.py # tabla final de fotos utilizables y resumen diario final
+python src/05_hojas_semanales.py   # hojas semanales por encuadre para identificar hitos
 ```
 
 La tabla para usar en adelante es `data/processed_data/fotos_utilizables.csv` (una fila por fotografía, con `utilizable`, `motivo_exclusion`, `tipo_exclusion`, `tramo_id`, `encuadre_id` y `rotacion_desde_crudo`), junto con `resumen_diario_final.csv` (por día, con `fotos_utiles` y `foto_del_dia` calculados solo con fotos utilizables).
@@ -39,6 +41,15 @@ Las correcciones a mano van en `data/processed_data/revision_manual.csv` (column
 
 - **Tramo y encuadre.** `tramo_id` agrupa periodos en que la imagen no cambia; `encuadre_id` agrupa tramos con la misma vista física de la cámara. Para comparar antes y después de la obra se usa `encuadre_id`.
 - **Fotos utilizables.** Una foto es utilizable si es diurna, legible y con luz suficiente, su día muestra la obra, su orientación está resuelta y no está dañada, sobreexpuesta, empañada ni es nocturna con focos. El tipo de exclusión es una clasificación aproximada por reglas de imagen (umbrales al inicio de `04_fotos_utilizables.py`).
+
+### Hitos de la obra
+
+Los hitos (cambios visibles en la obra) **se identifican a mano**; `05_hojas_semanales.py` solo prepara el material:
+
+- **Foto semanal.** Por cada semana (lunes a domingo) y `encuadre_id`, entre los días con `estado_dia_final == CON_EVIDENCIA` se elige la `foto_del_dia` con mayor `nitidez`. Una semana repartida entre dos encuadres (2026-01-12 a 2026-01-18) aparece en la hoja de cada uno; una semana sin días con evidencia queda como celda «sin evidencia». Las semanas del periodo sin vista de la obra (2026-02-09 a 2026-03-01) no tienen encuadre y no aparecen. La selección queda en `data/processed_data/fotos_semanales.csv` (`semana_inicio`, `encuadre_id`, `ruta`, `fecha_hora`, `nitidez`).
+- **Hojas.** `reports/hitos/semanas_encuadre_<id>.jpg` (miniaturas de 640 px en orden cronológico, con fecha y hora encima; se dividen en `_parte1`, `_parte2`... si no caben). Siguen la regla para mostrar de abajo.
+- **Modo diario.** Para acotar la fecha de un cambio que se ve entre dos semanas: `python src/05_hojas_semanales.py --dias 2025-10-06 2025-10-12` genera `reports/hitos/dias_<inicio>_<fin>.jpg` con la foto del día de cada día del rango (celda «sin evidencia» con el estado del día donde no hay).
+- **Anotación.** Los hitos se anotan en `data/processed_data/hitos.csv` (`fecha_inicio`, `fecha_fin`, `encuadre_id`, `titulo`, `descripcion`, `ruta_foto_antes`, `ruta_foto_despues`, `confianza` alta/media/baja, `identificado_por`). El script la crea solo si no existe, con el hito ya identificado (colocación de la losa del puente, 2025-10-08 a 2025-10-09); si existe, no la toca.
 
 ### Regla para mostrar las fotos
 
@@ -50,7 +61,7 @@ imagen = cv2.imread(ruta, cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
 imagen = cv2.rotate(imagen, cv2.ROTATE_180)   # rotacion_desde_crudo == 180
 ```
 
-Con Pillow: `Image.open(ruta)` sin `ImageOps.exif_transpose`, y luego `imagen.rotate(180)`. Es la regla que siguen las hojas de contacto de 02, 03 y 04.
+Con Pillow: `Image.open(ruta)` sin `ImageOps.exif_transpose`, y luego `imagen.rotate(180)`. Es la regla que siguen las hojas de contacto de 02, 03 y 04 y las hojas de hitos de 05.
 
 ### Por qué: la etiqueta EXIF Orientation
 
