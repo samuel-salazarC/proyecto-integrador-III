@@ -14,6 +14,11 @@ Curso: Visualización de datos (BCD 8215), Lead University · III cuatrimestre 2
 ## Estructura
 
 ```
+app/
+  streamlit_app.py # app web (solo lee archivos de app/)
+  requirements.txt # dependencias mínimas para el despliegue
+  fotos/           # fotos reducidas e índice (generadas por 06)
+  datos/           # tablas livianas para la app (generadas por 06)
 data/
   raw_data/        # fotografías originales (no versionadas)
   processed_data/  # tablas generadas por el procesamiento
@@ -33,6 +38,7 @@ python src/02_tramos_encuadre.py   # tramos de encuadre fijo y días que muestra
 python src/03_orientacion.py       # orientación detectada de cada foto (después de 02)
 python src/04_fotos_utilizables.py # tabla final de fotos utilizables y resumen diario final
 python src/05_hojas_semanales.py   # hojas semanales por encuadre para identificar hitos
+python src/06_fotos_app.py         # fotos reducidas y tablas para la app (después de anotar hitos.csv)
 ```
 
 La tabla para usar en adelante es `data/processed_data/fotos_utilizables.csv` (una fila por fotografía, con `utilizable`, `motivo_exclusion`, `tipo_exclusion`, `tramo_id`, `encuadre_id` y `rotacion_desde_crudo`), junto con `resumen_diario_final.csv` (por día, con `fotos_utiles` y `foto_del_dia` calculados solo con fotos utilizables).
@@ -71,6 +77,26 @@ Los píxeles guardados en los JPG están **siempre al revés**; lo que cambia es
 - Pillow (`Image.open`) **no** la aplica, salvo que se use `ImageOps.exif_transpose(imagen)`.
 
 Ignorar la etiqueta y girar siempre 180° da el mismo resultado en todas las fotos y no depende de una etiqueta que a veces viene mal. La columna `rotacion` de `orientacion_fotos.csv` (0 o 180) es la orientación que detecta 03 sobre la imagen **con la etiqueta ya aplicada**; se conserva como comprobación (coincide con la etiqueta en todas las fotos), pero para mostrar se usa `rotacion_desde_crudo`. Ese cambio de etiqueta es también la `ROTACION_180` del 2025-10-09 que separa los tramos 1 y 2: la cámara no se movió.
+
+## App web
+
+`app/streamlit_app.py` es la app del proyecto, para la ciudadanía: cifras clave, la obra y la cámara, lo que se ve (una foto por semana con los cambios identificados, antes y después de cada cambio y un comparador con barra deslizante entre dos fechas) y lo que no se ve (calendario de evidencia por día y hora, resumen por mes y por qué faltan datos).
+
+La app **solo lee archivos de `app/`**, así que funciona sin `data/raw_data`. Esos archivos los genera `06_fotos_app.py`:
+
+- `app/fotos/`: la foto del día de cada día con evidencia y las fotos de `hitos.csv` y `fotos_semanales.csv`, reducidas a 960 px de ancho (JPEG calidad 80, sin EXIF, con la regla para mostrar ya aplicada); `miniaturas/` con las fotos semanales a 400 px; índice en `indice.csv` (`fecha`, `encuadre_id`, `vista`, `archivo`, `fecha_hora`).
+- `app/datos/`: `dias.csv`, `evidencia_dia_hora.csv` (por día y hora 0–23: «hay foto útil», «hay foto pero no se ve la obra» o «no hay foto»), `hitos.csv`, `fotos_semanales.csv` (una foto por semana y vista), `vistas.csv` y `alineacion.csv` (corrimiento de la cámara dentro de una vista, para alinear el comparador), con las rutas de fotos relativas a `app/` (`fotos/<archivo>.jpg`).
+- **Vista.** La app agrupa los encuadres 1 y 2 como una sola vista (el 2026-01-17 la cámara solo se corrió ~31 px) y usa `vista` en vez de `encuadre_id`; el único cambio de vista es el del 2026-03-04. `encuadre_id` no cambia en `data/processed_data`.
+
+Cada vez que se agregan o corrigen hitos en `data/processed_data/hitos.csv` hay que volver a correr `python src/06_fotos_app.py`: agrega las fotos nuevas y borra las que ya no se usan. La app no depende de un número fijo de hitos. `app/` pesa unos 20 MB y se versiona.
+
+Para correrla localmente:
+
+```bash
+streamlit run app/streamlit_app.py
+```
+
+Para desplegarla en [Streamlit Community Cloud](https://share.streamlit.io): *Create app* → elegir este repositorio y la rama `main`, **archivo principal `app/streamlit_app.py`**, y en *Advanced settings* la **versión de Python igual a la local** (3.13). Community Cloud instala `app/requirements.txt` (el de la carpeta del archivo principal), que tiene solo lo que usa la app; el `requirements.txt` de la raíz es el entorno completo de análisis.
 
 ## Instalación
 
