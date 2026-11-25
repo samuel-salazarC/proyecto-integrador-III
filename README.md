@@ -107,6 +107,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Documentación
+
+La [nota metodológica](docs/nota_metodologica.md) describe la procedencia de los datos, la depuración, la identificación de los cambios, las decisiones de diseño y las limitaciones.
+
 ## Equipo
 
 - José Ignacio Sánchez Víquez

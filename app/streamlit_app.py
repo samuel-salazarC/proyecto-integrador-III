@@ -1141,7 +1141,8 @@ def pie() -> None:
             "borrosas o dañadas y las de los días en que la cámara no apuntaba a la obra. De cada día con fotos útiles se "
             "eligió una cercana al mediodía. Los cambios se identificaron a mano, comparando una foto por semana y, para "
             "precisar la fecha, una foto por día. Cuando la cámara se corrió ligeramente, el comparador alinea las fotos "
-            "para que coincidan."
+            "para que coincidan. "
+            f"El procedimiento completo está en la [nota metodológica]({REPO_URL}/blob/main/docs/nota_metodologica.md)."
         )
     st.html('<p class="alcance">Este sitio muestra únicamente lo que se observa en las fotos de la cámara; no informa '
             'presupuesto, plazos ni porcentaje de avance de la obra.</p>')
