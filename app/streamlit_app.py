@@ -1,7 +1,10 @@
 """Puente María Aguilar: lo que muestran las fotos.
 
-App de una página para la ciudadanía. Solo lee archivos de app/ (generados por
-src/06_fotos_app.py), así que funciona desplegada sin las fotografías originales.
+App de una página para la ciudadanía, con estructura de pieza de periodismo de datos:
+portada con el hallazgo y un comparador, recorrido paso a paso por los cambios, lo que no
+se ve (calendario de evidencia) y un comparador libre al final («Explore por su cuenta»). Solo lee archivos de app/
+(generados por src/06_fotos_app.py), así que funciona desplegada sin las fotos originales.
+El tema (tipografía y fondos) está en .streamlit/config.toml.
 
 Uso local:
   streamlit run app/streamlit_app.py
@@ -11,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import html
+import re
 from pathlib import Path
 
 import numpy as np
@@ -27,23 +31,30 @@ NO_SE_VE = "hay foto pero no se ve la obra"
 SIN_FOTO = "no hay foto"
 ESTADOS = [UTIL, NO_SE_VE, SIN_FOTO]
 
-# Paleta validada para daltonismo (azul / bermellón, Okabe-Ito) más un gris neutro para
-# "no hay foto"; los estados también se distinguen por la leyenda, el tooltip y el texto.
+# Dos colores con significado fijo en toda la página: azul = hay evidencia de la obra,
+# bermellón = no hay evidencia (sólido: no hay foto; tenue: hay foto pero no se ve la obra).
+# Azul/bermellón validados para daltonismo (Okabe-Ito); el resto son neutros del tema.
 COLORES = {
-    "light": {UTIL: "#0072B2", NO_SE_VE: "#D55E00", SIN_FOTO: "#DEDEDA", "linea": "#1A1A19"},
-    "dark": {UTIL: "#3D9BE0", NO_SE_VE: "#E8743B", SIN_FOTO: "#3A3A38", "linea": "#F2F2F0"},
+    "light": {"si": "#0072B2", "no": "#D55E00", "no_suave": "#F0B48C", "tinta": "#1A1A19",
+              "tenue": "#66635C", "fondo": "#FBFAF7", "borde": "#DEDBD3", "hueco": "rgba(213,94,0,0.13)"},
+    "dark": {"si": "#3D9BE0", "no": "#E8743B", "no_suave": "#7E3A16", "tinta": "#EDEBE6",
+             "tenue": "#A8A59D", "fondo": "#141413", "borde": "#3A3936", "hueco": "rgba(232,116,59,0.20)"},
 }
-CLARIDAD = {"alta": "Se ve con claridad.",
-            "media": "Se ve, pero con algunos detalles difíciles de distinguir.",
-            "baja": "Se ve con poca claridad: es una interpretación tentativa."}
+COLOR_ESTADO = {UTIL: "si", NO_SE_VE: "no_suave", SIN_FOTO: "no"}
+CLARIDAD = {"alta": "muy claro", "media": "claro", "baja": "poco claro"}  # según la confianza de hitos.csv
 MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 MESES_LARGO = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
                "septiembre", "octubre", "noviembre", "diciembre"]
 DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
-MAX_RADIO_HITOS = 15  # con más hitos, la lista se vuelve un desplegable
+NUMEROS = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez",
+           "once", "doce", "trece", "catorce", "quince", "dieciséis", "diecisiete", "dieciocho",
+           "diecinueve", "veinte"]
 HORAS_LUZ = range(6, 18)  # el calendario muestra de 6:00 a 17:59; de noche no se ve la obra
+# Hito que marca el puente en uso, para el titular de portada ("En N semanas, un hueco se
+# convirtió en un puente"): se busca esta palabra en el título. Si no está, titular genérico.
+PALABRA_PUENTE_EN_USO = "vehículos"
 
-st.set_page_config(page_title="Puente María Aguilar: lo que muestran las fotos", page_icon="🌉", layout="centered")
+st.set_page_config(page_title="Puente María Aguilar: lo que muestran las fotos", page_icon="🌉", layout="wide")
 
 
 # ============================================================================
@@ -72,11 +83,15 @@ def imagen_base64(ruta: str) -> str:
 
 
 def tramos_sin_evidencia(dias: pd.DataFrame) -> pd.DataFrame:
-    """Rachas de días consecutivos sin foto útil (inicio, fin, días)."""
+    """Rachas de días consecutivos sin foto útil (inicio, fin, días), de la más larga a la más corta."""
     sin = dias["estado"].ne(UTIL)
     grupo = (sin != sin.shift()).cumsum()
     rachas = dias[sin].groupby(grupo[sin])["fecha"].agg(["min", "max", "size"])
     return rachas.rename(columns={"min": "inicio", "max": "fin", "size": "dias"}).sort_values("dias", ascending=False)
+
+
+def cambios_de_vista(vistas: pd.DataFrame) -> pd.Series:
+    return vistas.sort_values("fecha_inicio")["fecha_inicio"].iloc[1:]
 
 
 # ============================================================================
@@ -111,6 +126,15 @@ def plural(n: int, singular: str, plural_: str | None = None) -> str:
     return f"{n} {singular if n == 1 else (plural_ or singular + 's')}"
 
 
+def palabra(n: int, mayuscula: bool = False) -> str:
+    texto = NUMEROS[n] if 0 <= n < len(NUMEROS) else str(n)
+    return texto[:1].upper() + texto[1:] if mayuscula else texto
+
+
+def primera_frase(texto: str) -> str:
+    return re.split(r"(?<=\.)\s+(?=[A-ZÁÉÍÓÚÑ])", str(texto).strip(), maxsplit=1)[0]
+
+
 def alt_foto(f: pd.Timestamp, extra: str = "") -> str:
     return (f"Foto de la cámara tomada el {fecha(f, dia_semana=True)} a las {hora(f)}: "
             f"vista del Puente María Aguilar y la vía a su alrededor.{(' ' + extra) if extra else ''}")
@@ -124,151 +148,58 @@ def tema() -> str:
 
 
 # ============================================================================
-# Secciones
+# Estilo
 # ============================================================================
 
-def encabezado(d: dict) -> None:
-    dias, hitos = d["dias"], d["hitos"]
-    utiles = int(dias["estado"].eq(UTIL).sum())
-    hueco = tramos_sin_evidencia(dias).iloc[0]
-    inicio, fin = dias["fecha"].min(), dias["fecha"].max()
-
-    st.title("Puente María Aguilar: lo que muestran las fotos")
-    st.markdown("#### ¿Qué cambios se observan en la obra, cuándo ocurrieron y qué días no hay evidencia fotográfica?")
-
-    tarjetas = [
-        ("Días con fotos útiles de la obra", f"{utiles} de {len(dias)}",
-         f"En {len(dias) - utiles} días no hay una foto donde se vea la obra."),
-        ("Periodo más largo sin evidencia", plural(int(hueco["dias"]), "día"), rango(hueco["inicio"], hueco["fin"])),
-        ("Cambios identificados en la obra", str(len(hitos)), "Revisados a mano, foto por foto."),
-        ("Periodo cubierto", plural(len(dias), "día"), rango(inicio, fin)),
-    ]
-    for fila in (tarjetas[:2], tarjetas[2:]):
-        for col, (titulo, valor, nota) in zip(st.columns(2), fila):
-            with col.container(border=True):
-                st.metric(titulo, valor)
-                st.caption(nota)
-
-
-def acto_contexto(d: dict) -> None:
-    dias, horas = d["dias"], d["horas"]
-    st.header("1. La obra y la cámara")
-    total_fotos = int(horas["fotos"].sum())
-    st.markdown(
-        f"El **Puente María Aguilar** es una de las obras del programa PROERI. Una cámara fija instalada "
-        f"por la Contraloría General de la República (sistema dIAra) tomó una foto cada pocos minutos, "
-        f"de día y de noche, entre el {fecha(dias['fecha'].min())} y el {fecha(dias['fecha'].max())}: "
-        f"unas {miles(total_fotos)} fotos en total."
-    )
-    st.markdown(
-        "Este sitio usa esas fotos para responder tres preguntas: **qué cambios se ven** en la obra, "
-        "**cuándo ocurrieron** y **qué días no hay fotos** que permitan verla. No muestra porcentajes de "
-        "avance, plazos ni montos: solo lo que la cámara permite ver."
-    )
-    ultima = d["semanas"].dropna(subset=["foto"]).iloc[-1]
-    st.image(str(APP / ultima["foto"]), width="stretch", alt=alt_foto(ultima["fecha_hora"]),
-             caption=f"La última foto útil de la serie: {fecha(ultima['fecha_hora'], dia_semana=True)}, {hora(ultima['fecha_hora'])}.")
+def estilos(c: dict) -> None:
+    st.html(f"""<style>
+[data-testid="stMainBlockContainer"] {{ max-width: 1000px; padding: 2.5rem 1.25rem 5rem; }}
+h1, h2, h3 {{ font-family: "Source Serif 4", Georgia, serif !important; }}
+[data-testid="stHeadingWithActionElements"] h2, [data-testid="stHeadingWithActionElements"] h3 {{ padding-top: 0.2rem !important; }}
+h1 {{ font-size: clamp(2.2rem, 1.3rem + 3.8vw, 3.75rem) !important; line-height: 1.05 !important;
+      letter-spacing: -0.02em; padding-bottom: 0.4rem !important; }}
+h2 {{ font-size: clamp(1.65rem, 1.15rem + 2.1vw, 2.5rem) !important; line-height: 1.1 !important;
+      letter-spacing: -0.01em; }}
+h3 {{ font-size: clamp(1.3rem, 1.05rem + 1vw, 1.7rem) !important; line-height: 1.2 !important; }}
+[data-testid="stMarkdownContainer"] p, [data-testid="stCaptionContainer"] p {{ max-width: 68ch; }}
+.kicker {{ text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.78rem; font-weight: 700;
+           color: {c['tenue']}; margin: 0; }}
+.bajada {{ font-size: clamp(1.08rem, 1rem + 0.4vw, 1.3rem); line-height: 1.45; color: {c['tenue']};
+           max-width: 60ch; margin: 0 0 0.5rem; }}
+.seccion {{ margin: 3.5rem 0 1.25rem; border-top: 1px solid {c['borde']}; }}
+.cifras {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem 1.5rem; margin: 0.5rem 0; }}
+.cifra {{ border-top: 3px solid {c['borde']}; padding-top: 0.6rem; }}
+.cifra.si {{ border-top-color: {c['si']}; }} .cifra.no {{ border-top-color: {c['no']}; }}
+.cifra .num {{ display: block; font-family: "Source Serif 4", serif; font-weight: 700; line-height: 1;
+              font-size: clamp(2.2rem, 1.6rem + 2vw, 3rem); color: {c['tinta']}; }}
+.cifra.si .num {{ color: {c['si']}; }} .cifra.no .num {{ color: {c['no']}; }}
+.cifra .txt {{ display: block; margin-top: 0.3rem; font-size: 0.95rem; line-height: 1.35; color: {c['tenue']}; }}
+@media (max-width: 640px) {{
+  .cifras {{ grid-template-columns: 1fr; }}
+  .cifra {{ display: grid; grid-template-columns: 5.5rem 1fr; align-items: baseline; gap: 0.75rem; }}
+  .cifra .txt {{ margin-top: 0; }}
+}}
+.claridad {{ display: inline-block; margin: 0.4rem 0 0; padding: 0.3rem 0.75rem; border: 1px solid {c['borde']};
+             border-radius: 999px; font-size: 0.9rem; color: {c['tenue']}; }}
+.claridad b {{ color: {c['tinta']}; }}
+.paso {{ font-variant-numeric: tabular-nums; font-weight: 700; text-align: center; margin: 0; }}
+.leyenda {{ display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; font-size: 0.9rem; color: {c['tenue']}; margin: 0.25rem 0; }}
+.leyenda span::before {{ content: ""; display: inline-block; width: 0.85em; height: 0.85em; margin-right: 0.4em;
+                        vertical-align: -0.05em; border-radius: 2px; background: var(--c); border: 1px solid {c['borde']}; }}
+</style>""")
 
 
-def tarjetas_semanales(d: dict, hito_sel: int | None) -> tuple[str, int]:
-    """Tira horizontal (se desliza en el celular) con una foto por semana y los hitos de cada una."""
-    semanas, hitos, dias = d["semanas"].dropna(subset=["foto"]), d["hitos"], d["dias"]
-    semanas = semanas.sort_values(["semana_inicio", "vista"]).reset_index(drop=True)
-    # Cada hito va en la semana (de su misma vista de la cámara) en que ya se ve el cambio
-    asignado: dict[int, list] = {}
-    for h in hitos.itertuples():
-        mismas = semanas[semanas["vista"].eq(h.vista)]
-        if mismas.empty:
-            mismas = semanas
-        distancia = (mismas["semana_inicio"] + pd.Timedelta(days=3) - h.fecha_fin).abs()
-        asignado.setdefault(distancia.idxmin(), []).append(h)
-
-    partes = []
-    anterior = None
-    for i, s in semanas.iterrows():
-        if anterior is not None:
-            avisos = []
-            hueco = dias[(dias["fecha"] > anterior["fecha_hora"]) & (dias["fecha"] < s["fecha_hora"])]
-            rachas = tramos_sin_evidencia(hueco) if len(hueco) else pd.DataFrame()
-            if len(rachas) and rachas.iloc[0]["dias"] >= 7:
-                r = rachas.iloc[0]
-                avisos.append(f"<b>{rango(r['inicio'], r['fin'])}</b><br>{plural(int(r['dias']), 'día')} sin fotos útiles de la obra")
-            if s["vista"] != anterior["vista"]:
-                avisos.append("<b>La cámara se movió</b><br>la vista cambia desde aquí")
-            if avisos:
-                partes.append(f'<div class="corte" role="note">{"<hr>".join(avisos)}</div>')
-        chips = "".join(
-            f'<div class="hito{" sel" if h.numero == hito_sel else ""}"><span class="num">{h.numero}</span>'
-            f'{html.escape(h.titulo)}<br><small>{rango(h.fecha_inicio, h.fecha_fin)}</small></div>'
-            for h in asignado.get(i, []))
-        fin = s["semana_inicio"] + pd.Timedelta(days=6)
-        alt = alt_foto(s["fecha_hora"], f"Semana del {rango(s['semana_inicio'], fin)}.")
-        miniatura = Path(s["foto"]).parent / "miniaturas" / Path(s["foto"]).name
-        ruta = miniatura if (APP / miniatura).exists() else Path(s["foto"])
-        seleccionada = any(h.numero == hito_sel for h in asignado.get(i, []))
-        partes.append(
-            f'<figure class="semana{" sel" if seleccionada else ""}">'
-            f'<figcaption><b>Semana del {rango(s["semana_inicio"], fin)}</b><br>'
-            f'<small>foto del {fecha(s["fecha_hora"], dia_semana=True, anio=False)}, {hora(s["fecha_hora"])}</small></figcaption>'
-            f'<img src="data:image/jpeg;base64,{imagen_base64(str(ruta))}" alt="{html.escape(alt)}" loading="lazy">'
-            f'{chips}</figure>')
-        anterior = s
-    return "".join(partes), len(semanas)
+def seccion(kicker: str, titular: str, bajada: str | None = None) -> None:
+    """Encabezado de sección: rótulo pequeño, titular con la conclusión y como máximo dos frases."""
+    st.html(f'<div class="seccion"></div><p class="kicker">{html.escape(kicker)}</p>')
+    st.header(titular, anchor=False)
+    if bajada:
+        st.html(f'<p class="bajada">{html.escape(bajada)}</p>')
 
 
-def linea_de_tiempo(d: dict, colores: dict) -> None:
-    hitos = d["hitos"]
-    st.subheader("Una foto por semana")
-    st.markdown("Desliza la tira hacia los lados para recorrer la obra semana a semana. Los números marcan "
-                "los cambios identificados; elige uno abajo para ver la foto de antes y la de después.")
-
-    clave = "hito_elegido"
-    hito_sel = st.session_state.get(clave, 1 if len(hitos) else None)
-    contenido, n_semanas = tarjetas_semanales(d, hito_sel)
-    st.html(f"""
-<style>
-.tira {{ display:flex; gap:12px; overflow-x:auto; padding:4px 2px 12px; scroll-snap-type:x proximity; }}
-.tira figure {{ margin:0; flex:0 0 200px; scroll-snap-align:start; font-size:0.85rem; line-height:1.3; }}
-.tira figure img {{ width:100%; border-radius:6px; display:block; margin:4px 0 6px; }}
-.tira figure.sel img {{ outline:3px solid {colores[UTIL]}; outline-offset:2px; }}
-.tira .hito {{ border-left:3px solid {colores['linea']}; padding:2px 0 2px 8px; margin-top:6px; }}
-.tira .hito.sel {{ border-left-color:{colores[UTIL]}; font-weight:600; }}
-.tira .num {{ display:inline-block; min-width:1.4em; height:1.4em; line-height:1.4em; text-align:center;
-             border-radius:50%; background:{colores['linea']}; color:{'#1A1A19' if colores['linea'] != '#1A1A19' else '#FFFFFF'};
-             font-size:0.75rem; font-weight:700; margin-right:6px; }}
-.tira .corte {{ flex:0 0 130px; align-self:stretch; border:2px dashed currentColor; border-radius:6px; opacity:0.75;
-               padding:10px; font-size:0.85rem; display:flex; flex-direction:column; justify-content:center; }}
-.tira .corte hr {{ margin:8px 0; border:none; border-top:1px solid currentColor; }}
-</style>
-<div class="tira" role="region" aria-label="Una foto por semana, en orden cronológico" tabindex="0">{contenido}</div>
-""")
-    if hitos.empty:
-        st.info("Todavía no hay cambios identificados.")
-        return
-    st.caption(f"{plural(n_semanas, 'semana')} con foto útil y {plural(len(hitos), 'cambio identificado', 'cambios identificados')}, "
-               f"entre el {fecha(hitos['fecha_inicio'].min())} y el {fecha(hitos['fecha_fin'].max())}.")
-
-    st.subheader("Los cambios, uno por uno")
-    etiquetas = {h.numero: f"{h.numero}. {rango(h.fecha_inicio, h.fecha_fin)} · {h.titulo}" for h in hitos.itertuples()}
-    if len(hitos) <= MAX_RADIO_HITOS:
-        numero = st.radio("Elige un cambio", list(etiquetas), format_func=etiquetas.get, key=clave)
-    else:
-        numero = st.selectbox("Elige un cambio", list(etiquetas), format_func=etiquetas.get, key=clave)
-    h = hitos[hitos["numero"].eq(numero)].iloc[0]
-    with st.container(border=True):
-        st.markdown(f"**{h['titulo']}** · {rango(h['fecha_inicio'], h['fecha_fin'])}")
-        st.markdown(h["descripcion"])
-        st.caption(CLARIDAD.get(str(h["confianza"]).strip().lower(), ""))
-        for col, (cuando, foto, momento) in zip(
-                st.columns(2), [("Antes", h["foto_antes"], h["fecha_hora_antes"]), ("Después", h["foto_despues"], h["fecha_hora_despues"])]):
-            with col:
-                if isinstance(foto, str) and (APP / foto).exists():
-                    st.image(str(APP / foto), width="stretch",
-                             alt=alt_foto(momento, f"{cuando} del cambio: {h['titulo']}."),
-                             caption=f"{cuando}: {fecha(momento, dia_semana=True)}, {hora(momento)}")
-                else:
-                    st.caption(f"{cuando}: foto no disponible")
-
+# ============================================================================
+# Comparador (portada y "Explore por su cuenta")
+# ============================================================================
 
 def corrimientos_entre(alineacion: pd.DataFrame, a: pd.Series, b: pd.Series) -> pd.DataFrame:
     """Corrimientos de la cámara (dentro de la misma vista) entre la fecha de a y la de b."""
@@ -317,7 +248,7 @@ def html_comparador(a: pd.Series, b: pd.Series, texto_a: str, texto_b: str, ajus
     etiqueta = html.escape(f"Barra de comparación: a la izquierda {texto_a}, a la derecha {texto_b}")
     return f"""<!doctype html><html lang="es"><head><meta charset="utf-8"><style>
 html, body {{ margin:0; padding:0; background:transparent; font-family:system-ui, sans-serif; }}
-.comp {{ position:relative; width:100%; overflow:hidden; border-radius:8px; line-height:0; user-select:none; touch-action:pan-y; }}
+.comp {{ position:relative; width:100%; overflow:hidden; border-radius:10px; line-height:0; user-select:none; touch-action:pan-y; }}
 .comp .lienzo {{ position:relative; transform-origin:0 0; transform:scale({aj['zoom']:.5f}) translate({-aj['vx']:.4f}%, {-aj['vy']:.4f}%); }}
 .comp img {{ width:100%; height:auto; display:block; }}
 .comp .despues {{ transform-origin:50% 50%;
@@ -325,14 +256,14 @@ html, body {{ margin:0; padding:0; background:transparent; font-family:system-ui
 .comp .antes {{ position:absolute; inset:0; clip-path:inset(0 50% 0 0); }}
 .comp .linea {{ position:absolute; top:0; bottom:0; left:50%; width:3px; margin-left:-1.5px; background:#fff;
                box-shadow:0 0 4px rgba(0,0,0,.6); pointer-events:none; }}
-.comp .asa {{ position:absolute; top:50%; left:50%; width:40px; height:40px; margin:-20px 0 0 -20px; border-radius:50%;
-             background:#fff; box-shadow:0 0 6px rgba(0,0,0,.6); pointer-events:none; display:flex; align-items:center;
-             justify-content:center; font:700 16px/1 system-ui, sans-serif; color:#1a1a19; }}
-.comp .rotulo {{ position:absolute; top:8px; padding:4px 8px; border-radius:4px; background:rgba(0,0,0,.7); color:#fff;
+.comp .asa {{ position:absolute; top:50%; left:50%; width:44px; height:44px; margin:-22px 0 0 -22px; border-radius:50%;
+             background:#fff; box-shadow:0 1px 8px rgba(0,0,0,.55); pointer-events:none; display:flex; align-items:center;
+             justify-content:center; font:700 18px/1 system-ui, sans-serif; color:#1a1a19; }}
+.comp .rotulo {{ position:absolute; top:10px; padding:5px 9px; border-radius:4px; background:rgba(20,20,19,.78); color:#fff;
                 font:600 13px/1.2 system-ui, sans-serif; pointer-events:none; }}
-.comp .izq {{ left:8px; }} .comp .der {{ right:8px; }}
+.comp .izq {{ left:10px; }} .comp .der {{ right:10px; }}
 .comp input {{ position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:ew-resize; }}
-.comp:has(input:focus-visible) {{ outline:3px solid #0072B2; outline-offset:2px; }}
+.comp:has(input:focus-visible) {{ outline:3px solid #0072B2; outline-offset:3px; }}
 </style></head><body>
 <div class="comp">
   <div class="lienzo">
@@ -357,91 +288,313 @@ r.addEventListener('input', mover); mover();
 </script></body></html>"""
 
 
-def comparador(d: dict) -> None:
-    dias = d["dias"]
-    st.subheader("Compara dos fechas")
-    st.markdown("Elige dos días y desliza la barra sobre la foto (o usa las flechas del teclado) para ver qué cambió.")
-    utiles = dias[dias["estado"].eq(UTIL)].reset_index(drop=True)
-    opciones = list(utiles.index)
-    etiqueta = {i: fecha(utiles.at[i, "fecha"], dia_semana=True) for i in opciones}
-    primera = utiles["vista"].iloc[0]
-    defecto_despues = utiles.index[utiles["vista"].eq(primera)][-1]
-    c1, c2 = st.columns(2)
-    i = c1.selectbox("Primera fecha", opciones, index=0, format_func=etiqueta.get, key="comp_antes")
-    j = c2.selectbox("Segunda fecha", opciones, index=int(defecto_despues), format_func=etiqueta.get, key="comp_despues")
-    if i == j:
-        st.info("Elige dos fechas distintas para compararlas.")
-        return
-    a, b = utiles.loc[min(i, j)], utiles.loc[max(i, j)]
+def mostrar_comparacion(d: dict, a: pd.Series, b: pd.Series) -> None:
+    """Deslizador si las dos fechas son de la misma vista; si no, las dos fotos lado a lado con aviso."""
     texto_a = f"{fecha(a['fecha_hora_foto'])}, {hora(a['fecha_hora_foto'])}"
     texto_b = f"{fecha(b['fecha_hora_foto'])}, {hora(b['fecha_hora_foto'])}"
     if a["vista"] == b["vista"]:
         corrimientos = corrimientos_entre(d["alineacion"], a, b)
         ajuste = ajuste_css(corrimientos)
         st.iframe(html_comparador(a, b, texto_a, texto_b, ajuste), height="content")
-        st.caption(f"Comparación con barra deslizante. A la izquierda, la foto del {fecha(a['fecha'], dia_semana=True)}; "
-                   f"a la derecha, la del {fecha(b['fecha'], dia_semana=True)}. Las dos fotos muestran la misma vista "
-                   f"de la cámara, así que lo que cambia es la obra.")
+        nota = (f"Izquierda: {fecha(a['fecha'], dia_semana=True)}. Derecha: {fecha(b['fecha'], dia_semana=True)}. "
+                "Misma vista de la cámara: lo que cambia es la obra.")
         if len(corrimientos):
-            st.caption("La cámara se corrió ligeramente entre estas fechas"
-                       + ("; la foto de la derecha se ajustó para que coincidan." if ajuste else "."))
+            nota += (" La cámara se corrió ligeramente entre estas fechas"
+                     + ("; la foto de la derecha se ajustó para que coincidan." if ajuste else "."))
+        st.caption(nota)
     else:
         st.warning("La cámara se movió entre estas fechas, la comparación no es exacta.", icon="⚠️")
         for col, fila, texto in zip(st.columns(2), [a, b], [texto_a, texto_b]):
             col.image(str(APP / fila["foto"]), width="stretch", alt=alt_foto(fila["fecha_hora_foto"]), caption=texto)
-    entre = d["hitos"][(d["hitos"]["fecha_fin"] > a["fecha"]) & (d["hitos"]["fecha_inicio"] < b["fecha"])]
-    if len(entre):
-        st.markdown(f"Entre estas fechas se identificaron {plural(len(entre), 'cambio')}: "
-                    + "; ".join(f"{h.numero}. {h.titulo.lower()}" for h in entre.itertuples()) + ".")
 
 
-def acto_lo_que_se_ve(d: dict, colores: dict) -> None:
-    st.header("2. Lo que se ve")
-    linea_de_tiempo(d, colores)
-    comparador(d)
+# ============================================================================
+# Portada
+# ============================================================================
+
+def titular_portada(hitos: pd.DataFrame) -> tuple[str, str | None]:
+    """Titular con el hallazgo y la frase que lo respalda, calculados de hitos.csv."""
+    en_uso = hitos[hitos["titulo"].str.contains(PALABRA_PUENTE_EN_USO, case=False, na=False)]
+    if hitos.empty or en_uso.empty:
+        return "Así cambió la obra del Puente María Aguilar", None
+    primero, uso = hitos.iloc[0], en_uso.iloc[0]
+    semanas = round((uso["fecha_fin"] - primero["fecha_inicio"]).days / 7)
+    respaldo = (f"Del cambio «{primero['titulo'].lower()}» ({fecha(primero['fecha_inicio'], anio=False)}) "
+                f"a «{uso['titulo'].lower()}» ({fecha(uso['fecha_fin'])}) pasaron {palabra(semanas)} semanas.")
+    return f"En {palabra(semanas)} semanas, un hueco se convirtió en un puente", respaldo
 
 
-def calendario(d: dict, colores: dict) -> go.Figure:
-    horas, vistas = d["horas"][d["horas"]["hora"].isin(HORAS_LUZ)], d["vistas"]
+def portada(d: dict) -> None:
+    dias, hitos = d["dias"], d["hitos"]
+    titular, respaldo = titular_portada(hitos)
+    st.html('<p class="kicker">Puente María Aguilar · lo que muestran las fotos</p>')
+    st.title(titular, anchor=False)
+    st.html('<p class="bajada">¿Qué cambió en la obra, cuándo ocurrió y qué días no hay fotos para saberlo? '
+            'Deslice la barra sobre la foto.</p>')
+
+    # Comparador de portada: primer y último día con foto útil de la primera vista
+    utiles = dias[dias["estado"].eq(UTIL)]
+    primera_vista = utiles[utiles["vista"].eq(utiles["vista"].iloc[0])]
+    mostrar_comparacion(d, primera_vista.iloc[0], primera_vista.iloc[-1])
+    if respaldo:
+        st.caption(respaldo)
+
+    n_util = int(dias["estado"].eq(UTIL).sum())
+    hueco = tramos_sin_evidencia(dias).iloc[0]
+    st.html(f"""<div class="cifras" role="list">
+  <div class="cifra si" role="listitem"><span class="num">{n_util}</span>
+    <span class="txt">de {len(dias)} días con fotos útiles de la obra ({rango(dias['fecha'].min(), dias['fecha'].max())})</span></div>
+  <div class="cifra no" role="listitem"><span class="num">{int(hueco['dias'])}</span>
+    <span class="txt">días seguidos sin evidencia, del {fecha(hueco['inicio'], anio=False)} al {fecha(hueco['fin'])}</span></div>
+  <div class="cifra" role="listitem"><span class="num">{len(hitos)}</span>
+    <span class="txt">cambios visibles en la obra, revisados a mano</span></div>
+</div>""")
+
+
+# ============================================================================
+# Historia guiada de los cambios
+# ============================================================================
+
+def titular_cambios(hitos: pd.DataFrame) -> str:
+    n = len(hitos)
+    if n == 0:
+        return "Todavía no hay cambios identificados"
+    por_mes = hitos.groupby(hitos["fecha_fin"].dt.to_period("M")).size()
+    mes, k = por_mes.idxmax(), int(por_mes.max())
+    if n >= 3 and k >= 2 and k > n / 3:
+        return (f"{palabra(n, True)} cambios visibles; {palabra(k)} de ellos en "
+                f"{MESES_LARGO[mes.month - 1]} de {mes.year}")
+    return f"{palabra(n, True)} cambios visibles entre {fecha(hitos['fecha_inicio'].min())} y {fecha(hitos['fecha_fin'].max())}"
+
+
+def eje_meses(fig: go.Figure, inicio: pd.Timestamp, fin: pd.Timestamp) -> None:
+    meses = pd.date_range(inicio.to_period("M").to_timestamp(), fin, freq="MS")
+    fig.update_xaxes(tickvals=[m + pd.Timedelta(days=14) for m in meses],
+                     ticktext=[MESES[m.month - 1] + (f"<br>{m.year}" if i == 0 or m.month == 1 else "")
+                               for i, m in enumerate(meses)],
+                     range=[inicio - pd.Timedelta(days=3), fin + pd.Timedelta(days=3)],
+                     ticks="", title=None, showgrid=False, zeroline=False, fixedrange=True)
+
+
+# Línea de tiempo de los cambios: componente propio (st.components.v2) con un botón real por
+# cambio. Plotly no sirve aquí: en pantallas táctiles emite el clic pero no la selección, así
+# que tocar un punto no llevaba al cambio. Con botones funciona igual con el dedo, el mouse y
+# el teclado (Tab y Enter). Las filas se reparten en el navegador según el ancho real, para
+# que los puntos no se toquen en el celular.
+LINEA_CSS = """
+.linea { font-family: var(--st-font, sans-serif); color: var(--st-text-color); }
+.linea .elegido { margin: 0 0 0.6rem; font-size: 1rem; line-height: 1.35; min-height: 2.7em; }
+.linea .elegido b { font-weight: 700; }
+.linea .elegido .num { display: inline-block; min-width: 1.6em; height: 1.6em; line-height: 1.6em; border-radius: 50%;
+  text-align: center; font-weight: 700; font-size: 0.85rem; margin-right: 0.45em;
+  background: var(--st-text-color); color: var(--st-background-color); }
+.linea .elegido .fecha { opacity: 0.72; white-space: nowrap; }
+.linea .lienzo { position: relative; }
+.linea .hueco { position: absolute; top: 0; bottom: 30px; border-radius: 4px; }
+.linea .hueco span { position: absolute; top: 4px; left: 0; right: 0; text-align: center; font-size: 0.72rem;
+  line-height: 1.15; font-weight: 600; }
+.linea .vista { position: absolute; top: 0; bottom: 30px; border-left: 1.5px dotted var(--st-text-color); opacity: 0.75; }
+.linea .vista span { position: absolute; bottom: 2px; left: 5px; font-size: 0.72rem; line-height: 1.15; white-space: nowrap; }
+.linea .eje { position: absolute; left: 0; right: 0; bottom: 0; height: 30px; }
+.linea .eje span { position: absolute; transform: translateX(-50%); font-size: 0.72rem; line-height: 1.1;
+  text-align: center; opacity: 0.72; white-space: nowrap; }
+.linea button { position: absolute; width: 32px; height: 32px; margin: -16px 0 0 -16px; padding: 0; border-radius: 50%;
+  border: 2px solid var(--st-text-color); background: var(--st-background-color); color: var(--st-text-color);
+  font: 700 0.8rem/1 var(--st-font, sans-serif); cursor: pointer; touch-action: manipulation; }
+.linea button::after { content: ""; position: absolute; inset: -6px; border-radius: 50%; }
+.linea button[aria-current="step"] { background: var(--st-text-color); color: var(--st-background-color);
+  width: 36px; height: 36px; margin: -18px 0 0 -18px; }
+.linea button:hover { box-shadow: 0 0 0 4px color-mix(in srgb, var(--st-text-color) 18%, transparent); }
+.linea button:focus-visible { outline: 3px solid #0072B2; outline-offset: 3px; }
+"""
+
+LINEA_JS = """
+export default function (component) {
+  const { data, setTriggerValue, parentElement } = component;
+  const SEPARACION = 44, FILA = 46, EJE = 30, ARRIBA = 30;
+  // Streamlit vuelve a llamar a esta función cuando cambian los datos: se quita lo anterior
+  parentElement.querySelectorAll('.linea').forEach((e) => e.remove());
+  const raiz = document.createElement('div');
+  raiz.className = 'linea';
+  raiz.setAttribute('role', 'group');
+  raiz.setAttribute('aria-label', 'Línea de tiempo de los cambios');
+  parentElement.appendChild(raiz);
+
+  function dibujar() {
+    const ancho = raiz.clientWidth || 600;
+    // Filas: cada punto va en la primera fila donde queda a SEPARACION px del anterior
+    const ultimo = [], filas = data.puntos.map((p) => {
+      const x = p.x / 100 * ancho;
+      let f = 0;
+      while (ultimo[f] !== undefined && x - ultimo[f] < SEPARACION) f++;
+      ultimo[f] = x;
+      return f;
+    });
+    const nFilas = Math.max(1, ...filas.map((f) => f + 1));
+    const alto = ARRIBA + nFilas * FILA + EJE;
+    const sel = data.puntos.find((p) => p.elegido);
+    let h = '<p class="elegido" aria-live="polite">' + (sel
+      ? '<span class="num">' + sel.n + '</span><b>' + sel.titulo + '</b> <span class="fecha">· ' + sel.rango + '</span>'
+      : '') + '</p>';
+    h += '<div class="lienzo" style="height:' + alto + 'px">';
+    if (data.hueco) {
+      h += '<div class="hueco" style="left:' + data.hueco.x0 + '%;width:' + (data.hueco.x1 - data.hueco.x0) +
+           '%;background:' + data.hueco.fondo + ';color:' + data.hueco.color + '"><span>' + data.hueco.texto + '</span></div>';
+    }
+    data.vistas.forEach((v) => {
+      h += '<div class="vista" style="left:' + v.x + '%"><span>' + v.texto + '</span></div>';
+    });
+    h += '<div class="eje" aria-hidden="true">' + data.meses.map((m) =>
+      '<span style="left:' + m.x + '%">' + m.texto + '</span>').join('') + '</div>';
+    data.puntos.forEach((p, i) => {
+      const y = alto - EJE - FILA / 2 - filas[i] * FILA;
+      h += '<button type="button" data-n="' + p.n + '" style="left:' + p.x + '%;top:' + y + 'px" title="' +
+           p.titulo + ' · ' + p.rango + '" aria-label="Cambio ' + p.n + ': ' + p.titulo + ', ' + p.rango + '"' +
+           (p.elegido ? ' aria-current="step"' : '') + '>' + p.n + '</button>';
+    });
+    h += '</div>';
+    raiz.innerHTML = h;
+    raiz.querySelectorAll('button').forEach((b) => {
+      b.onclick = () => setTriggerValue('elegido', Number(b.dataset.n));
+    });
+  }
+
+  dibujar();
+  const observador = new ResizeObserver(() => {
+    if (!raiz.isConnected) { observador.disconnect(); return; }
+    dibujar();
+  });
+  observador.observe(raiz);
+  return () => { observador.disconnect(); raiz.remove(); };
+}
+"""
+
+linea_componente = st.components.v2.component("linea_de_tiempo_cambios", css=LINEA_CSS, js=LINEA_JS)
+
+
+def datos_linea(d: dict, c: dict, paso: int) -> dict:
+    """Posiciones (en % del ancho) de los cambios, el hueco más largo, los cambios de vista y los meses."""
+    hitos, dias = d["hitos"], d["dias"]
+    inicio, fin = dias["fecha"].min(), dias["fecha"].max()
+    margen = 4.0  # % a cada lado para que los puntos de los extremos no se corten
+
+    def x(f: pd.Timestamp) -> float:
+        return round(margen + (f - inicio) / (fin - inicio) * (100 - 2 * margen), 3)
+
+    hueco = tramos_sin_evidencia(dias).iloc[0]
+    meses = pd.date_range(inicio.to_period("M").to_timestamp(), fin, freq="MS")
+    return {
+        "puntos": [{"n": int(h.numero), "x": x(h.fecha_fin), "titulo": html.escape(h.titulo),
+                    "rango": rango(h.fecha_inicio, h.fecha_fin), "elegido": i == paso}
+                   for i, h in enumerate(hitos.itertuples())],
+        "hueco": {"x0": x(hueco["inicio"] - pd.Timedelta(hours=12)), "x1": x(hueco["fin"] + pd.Timedelta(hours=12)),
+                  "texto": f"{int(hueco['dias'])} días<br>sin fotos<br>de la obra", "fondo": c["hueco"], "color": c["no"]},
+        "vistas": [{"x": x(f - pd.Timedelta(hours=12)), "texto": "cambió<br>la vista"} for f in cambios_de_vista(d["vistas"])],
+        "meses": [{"x": x(max(m + pd.Timedelta(days=14), inicio)),
+                   "texto": MESES[m.month - 1] + (f"<br>{m.year}" if i == 0 or m.month == 1 else "")}
+                  for i, m in enumerate(meses)],
+    }
+
+
+def mover_paso(delta: int, total: int) -> None:
+    st.session_state.paso = min(max(st.session_state.paso + delta, 0), total - 1)
+
+
+def historia(d: dict, c: dict) -> None:
+    hitos = d["hitos"]
+    seccion("Los cambios", titular_cambios(hitos),
+            "Toque un punto de la línea de tiempo o use los botones para recorrerlos uno por uno." if len(hitos) else None)
+    if hitos.empty:
+        return
+    total = len(hitos)
+    paso = min(st.session_state.setdefault("paso", 0), total - 1)
+
+    resultado = linea_componente(data=datos_linea(d, c, paso), key="linea_de_tiempo", on_elegido_change=lambda: None)
+    elegido = getattr(resultado, "elegido", None)
+    if elegido is not None and int(elegido) - 1 != paso:
+        st.session_state.paso = min(max(int(elegido) - 1, 0), total - 1)
+        st.rerun()
+    hueco = tramos_sin_evidencia(d["dias"]).iloc[0]
+    vista = cambios_de_vista(d["vistas"])
+    st.caption(f"Línea de tiempo: {plural(total, 'cambio')} entre el {fecha(hitos['fecha_inicio'].min())} y el "
+               f"{fecha(hitos['fecha_fin'].max())}. Zona sombreada: {rango(hueco['inicio'], hueco['fin'])}, sin fotos "
+               "de la obra." + (f" Línea punteada: el {fecha(vista.iloc[0])} cambió la vista de la cámara." if len(vista) else ""))
+
+    with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
+        st.button("← Anterior", on_click=mover_paso, args=(-1, total), disabled=paso == 0, key="anterior")
+        st.html(f'<p class="paso" aria-live="polite">Cambio {paso + 1} de {total}</p>')
+        st.button("Siguiente →", on_click=mover_paso, args=(1, total), disabled=paso == total - 1, key="siguiente")
+
+    h = hitos.iloc[paso]
+    st.html(f'<p class="kicker" style="margin-top:1rem">{rango(h["fecha_inicio"], h["fecha_fin"])}</p>')
+    st.subheader(h["titulo"], anchor=False)
+    st.markdown(primera_frase(h["descripcion"]))
+    for col, (cuando, foto, momento) in zip(
+            st.columns(2, gap="medium"),
+            [("Antes", h["foto_antes"], h["fecha_hora_antes"]), ("Después", h["foto_despues"], h["fecha_hora_despues"])]):
+        with col:
+            if isinstance(foto, str) and (APP / foto).exists():
+                st.image(str(APP / foto), width="stretch", alt=alt_foto(momento, f"{cuando} del cambio: {h['titulo']}."),
+                         caption=f"{cuando} · {fecha(momento, dia_semana=True)}, {hora(momento)}")
+            else:
+                st.caption(f"{cuando}: foto no disponible")
+    claridad = CLARIDAD.get(str(h["confianza"]).strip().lower())
+    if claridad:
+        st.html(f'<p class="claridad">Qué tan claro se ve en las fotos: <b>{claridad}</b></p>')
+
+
+# ============================================================================
+# Lo que no se ve
+# ============================================================================
+
+def titular_calendario(dias: pd.DataFrame) -> str:
+    faltan = int(dias["estado"].ne(UTIL).sum())
+    if faltan == 0:
+        return "Todos los días hay evidencia de la obra"
+    n = round(len(dias) / faltan)
+    if n <= 1:
+        return f"En {faltan} de {len(dias)} días no hay evidencia de la obra"
+    return f"En uno de cada {palabra(n)} días no hay evidencia de la obra"
+
+
+def calendario(d: dict, c: dict) -> go.Figure:
+    horas = d["horas"][d["horas"]["hora"].isin(HORAS_LUZ)]
     codigo = {e: k for k, e in enumerate(ESTADOS)}
     tabla = horas.pivot(index="hora", columns="fecha", values="estado")
     fotos = horas.pivot(index="hora", columns="fecha", values="fotos")
     z = tabla.apply(lambda col: col.map(codigo)).astype(float).values
-    texto = [[f"{fecha(c, dia_semana=True)}, {h}:00–{h}:59<br><b>{tabla.at[h, c]}</b>"
-              + (f" ({plural(int(fotos.at[h, c]), 'foto')})" if fotos.at[h, c] else "")
-              for c in tabla.columns] for h in tabla.index]
+    texto = [[f"{fecha(col, dia_semana=True)}, {h}:00–{h}:59<br><b>{tabla.at[h, col]}</b>"
+              + (f" ({plural(int(fotos.at[h, col]), 'foto')})" if fotos.at[h, col] else "")
+              for col in tabla.columns] for h in tabla.index]
     escala = []
     for k, e in enumerate(ESTADOS):
-        escala += [[k / len(ESTADOS), colores[e]], [(k + 1) / len(ESTADOS), colores[e]]]
+        escala += [[k / len(ESTADOS), c[COLOR_ESTADO[e]]], [(k + 1) / len(ESTADOS), c[COLOR_ESTADO[e]]]]
     fig = go.Figure(go.Heatmap(z=z, x=tabla.columns, y=tabla.index, zmin=-0.5, zmax=len(ESTADOS) - 0.5,
                                colorscale=escala, showscale=False, text=texto, hovertemplate="%{text}<extra></extra>",
                                xgap=0, ygap=1))
-    for e in ESTADOS:  # leyenda con nombre para cada estado
-        fig.add_trace(go.Scatter(x=[None], y=[None], mode="markers", name=e, hoverinfo="skip",
-                                 marker=dict(symbol="square", size=14, color=colores[e],
-                                             line=dict(width=1, color=colores["linea"]))))
-    cambios = vistas.sort_values("fecha_inicio").iloc[1:]  # solo los cambios de vista
-    for k, c in enumerate(cambios.itertuples()):
-        x = c.fecha_inicio - pd.Timedelta(hours=12)
-        # Etiquetas alternadas a izquierda y derecha de la línea para que no se encimen en pantallas angostas
-        lado = "right" if k % 2 == 0 and k + 1 < len(cambios) else "left"
-        fig.add_shape(type="line", x0=x, x1=x, y0=HORAS_LUZ[0] - 0.5, y1=HORAS_LUZ[-1] + 0.5,
-                      line=dict(color=colores["linea"], width=2, dash="dot"))
-        fig.add_annotation(x=x, y=HORAS_LUZ[0] - 0.5, yanchor="bottom", text=f"la cámara<br>se movió<br>{fecha(c.fecha_inicio, anio=False)}",
-                           showarrow=False, font=dict(size=11, color=colores["linea"]), xanchor=lado,
-                           align=lado, xshift=4 if lado == "left" else -4)
+    # Hueco más largo: corchete y rótulo sobre el gráfico
+    hueco = tramos_sin_evidencia(d["dias"]).iloc[0]
+    x0, x1 = hueco["inicio"] - pd.Timedelta(hours=12), hueco["fin"] + pd.Timedelta(hours=12)
+    arriba = HORAS_LUZ[0] - 0.5
+    for xa, xb, ya, yb in [(x0, x1, arriba - 0.9, arriba - 0.9), (x0, x0, arriba - 0.9, arriba - 0.3),
+                           (x1, x1, arriba - 0.9, arriba - 0.3)]:
+        fig.add_shape(type="line", x0=xa, x1=xb, y0=ya, y1=yb, line=dict(color=c["no"], width=2))
+    fig.add_annotation(x=x1, y=arriba - 1.0, yanchor="bottom", xanchor="right", showarrow=False, align="right",
+                       text=f"<b>{int(hueco['dias'])} días seguidos sin evidencia</b><br>{rango(hueco['inicio'], hueco['fin'])}",
+                       font=dict(size=12, color=c["no"]))
+    for f in cambios_de_vista(d["vistas"]):
+        x = f - pd.Timedelta(hours=12)
+        fig.add_shape(type="line", x0=x, x1=x, y0=arriba - 1.0, y1=HORAS_LUZ[-1] + 0.5,
+                      line=dict(color=c["tinta"], width=1.5, dash="dot"))
+        fig.add_annotation(x=x, y=arriba - 1.0, yanchor="bottom", xanchor="left", xshift=5, showarrow=False,
+                           text=f"cambió<br>la vista<br>{fecha(f, anio=False)}", font=dict(size=11, color=c["tinta"]),
+                           align="left")
     marcas = list(range(HORAS_LUZ[0], HORAS_LUZ[-1] + 1, 3)) + [HORAS_LUZ[-1]]
-    fig.update_yaxes(autorange="reversed", tickvals=marcas, ticktext=[f"{h} h" for h in marcas],
-                     title=None, showgrid=False, fixedrange=True)
-    # Meses en español, rotulados a mitad de mes
-    meses = pd.date_range(tabla.columns.min().to_period("M").to_timestamp(), tabla.columns.max(), freq="MS")
-    fig.update_xaxes(tickvals=[m + pd.Timedelta(days=14) for m in meses],
-                     ticktext=[MESES[m.month - 1] + (f"<br>{m.year}" if i == 0 or m.month == 1 else "")
-                               for i, m in enumerate(meses)],
-                     ticks="", title=None, showgrid=False, fixedrange=True)
-    fig.update_layout(height=400, margin=dict(l=40, r=10, t=60, b=10), plot_bgcolor="rgba(0,0,0,0)",
-                      legend=dict(orientation="h", yanchor="top", y=-0.24, x=0, title=None),
-                      hoverlabel=dict(align="left"), separators=", ")
+    fig.update_yaxes(autorange=False, range=[HORAS_LUZ[-1] + 0.5, arriba - 3.2], tickvals=marcas,
+                     ticktext=[f"{h} h" for h in marcas], title=None, showgrid=False, zeroline=False, fixedrange=True)
+    eje_meses(fig, tabla.columns.min(), tabla.columns.max())
+    fig.update_layout(height=400, margin=dict(l=40, r=8, t=8, b=8), plot_bgcolor="rgba(0,0,0,0)",
+                      paper_bgcolor="rgba(0,0,0,0)", hoverlabel=dict(align="left"), separators=", ")
     return fig
 
 
@@ -460,80 +613,96 @@ def resumen_por_mes(dias: pd.DataFrame) -> list[str]:
             detalle.append(f"en {sin_foto} no hay fotos")
         if no_se_ve:
             detalle.append(f"en {no_se_ve} hay fotos pero no se ve la obra")
-        lineas.append(f"{nombre}: de {len(g)} días, {faltan} sin evidencia de la obra "
-                      f"({' y '.join(detalle)}).")
+        lineas.append(f"{nombre}: de {len(g)} días, {faltan} sin evidencia de la obra ({' y '.join(detalle)}).")
     return lineas
 
 
-def acto_lo_que_no_se_ve(d: dict, colores: dict) -> None:
-    dias, horas, vistas = d["dias"], d["horas"], d["vistas"]
-    st.header("3. Lo que no se ve")
-    st.markdown(f"Cada columna es un día y cada fila una hora de luz, de {HORAS_LUZ[0]} a {HORAS_LUZ[-1]} h. El color "
-                "indica si en esa hora hay una foto donde se vea la obra. La cámara también toma fotos de noche, pero "
-                "no sirven para ver la obra, por eso no aparecen. Pasa el cursor (o toca) sobre el gráfico para ver "
-                "el detalle.")
-    st.plotly_chart(calendario(d, colores), width="stretch", config={"displayModeBar": False, "scrollZoom": False})
-
-    luz = horas[horas["hora"].isin(HORAS_LUZ)]
-    horas_utiles = int(luz["estado"].eq(UTIL).sum())
+def lo_que_no_se_ve(d: dict, c: dict) -> None:
+    dias = d["dias"]
     hueco = tramos_sin_evidencia(dias).iloc[0]
+    seccion("Lo que no se ve", titular_calendario(dias),
+            f"Cada columna es un día y cada fila una hora de luz. De noche la cámara también toma fotos, "
+            "pero no sirven para ver la obra.")
+    leyenda = "".join(f'<span style="--c:{c[COLOR_ESTADO[e]]}">{e[:1].upper() + e[1:]}</span>' for e in ESTADOS)
+    st.html(f'<div class="leyenda" role="list" aria-label="Leyenda del calendario">{leyenda}</div>')
+    st.plotly_chart(calendario(d, c), width="stretch", config={"displayModeBar": False, "scrollZoom": False})
+
     n = dias["estado"].value_counts()
-    cambios = vistas.sort_values("fecha_inicio")["fecha_inicio"].iloc[1:]
-    st.markdown(
-        f"**En resumen:** de {len(dias)} días, {n.get(UTIL, 0)} tienen al menos una foto útil, en "
-        f"{n.get(NO_SE_VE, 0)} hay fotos pero no se ve la obra y en {n.get(SIN_FOTO, 0)} no hay ninguna foto. "
-        f"De las {miles(len(luz))} horas de luz del periodo, {miles(horas_utiles)} tienen al menos una foto útil. "
-        f"El periodo más largo "
-        f"sin evidencia va del {fecha(hueco['inicio'])} al {fecha(hueco['fin'])} ({plural(int(hueco['dias']), 'día')})"
-        + (f". La cámara se movió una sola vez, el {fecha(cambios.iloc[0])}." if len(cambios) == 1
-           else f". La cámara se movió {len(cambios)} veces: el {' y el '.join(fecha(c) for c in cambios)}." if len(cambios)
-           else ".")
+    vista = cambios_de_vista(d["vistas"])
+    st.caption(
+        f"De {len(dias)} días, {n.get(UTIL, 0)} tienen fotos útiles de la obra; en {n.get(SIN_FOTO, 0)} no hay "
+        f"ninguna foto y en {n.get(NO_SE_VE, 0)} hay fotos pero no se ve la obra. El hueco más largo va del "
+        f"{fecha(hueco['inicio'])} al {fecha(hueco['fin'])}"
+        + (f"; después, el {fecha(vista.iloc[0])}, cambió la vista de la cámara." if len(vista) == 1
+           else f"; la vista de la cámara cambió {len(vista)} veces." if len(vista) else ".")
     )
+    with st.expander("Mes a mes"):
+        st.markdown("\n".join(f"- {linea}" for linea in resumen_por_mes(dias)))
+    with st.expander("¿Por qué faltan datos?"):
+        no_se_ve = int(n.get(NO_SE_VE, 0))
+        st.markdown(
+            f"- **No hay foto:** en {plural(int(n.get(SIN_FOTO, 0)), 'día')} la cámara no envió ninguna foto. "
+            "Desde aquí no se puede saber por qué (corte de energía, de conexión u otra causa).\n"
+            f"- **Hay foto pero no se ve la obra:** en {plural(no_se_ve, 'día')} la cámara apuntaba a otra cosa "
+            "(el cielo, una superficie lisa o un techo) o las fotos estaban demasiado oscuras.\n"
+            "- **De noche:** la cámara también toma fotos, pero no sirven para ver la obra; por eso el calendario "
+            f"muestra solo de {HORAS_LUZ[0]} a {HORAS_LUZ[-1]} h.\n"
+            "- **Fotos que no sirven:** algunas salen empañadas, borrosas, quemadas por el sol o con franjas; casi "
+            "siempre hay otras útiles el mismo día.\n"
+            + (f"- **La cámara se movió:** el {' y el '.join(fecha(f) for f in vista)} cambió de posición, así que "
+               "comparar fotos de antes y después de esa fecha es menos exacto." if len(vista)
+               else "- **La cámara no cambió de posición** en todo el periodo.")
+        )
 
-    st.subheader("Mes a mes")
-    st.markdown("\n".join(f"- {linea}" for linea in resumen_por_mes(dias)))
 
-    st.subheader("¿Por qué faltan datos?")
-    no_se_ve = dias[dias["estado"].eq(NO_SE_VE)]
-    st.markdown(
-        f"- **No hay foto:** en {plural(n.get(SIN_FOTO, 0), 'día')} la cámara no envió ninguna foto. "
-        "Desde aquí no se puede saber por qué (corte de energía, de conexión u otra causa).\n"
-        f"- **Hay foto pero no se ve la obra:** en {plural(len(no_se_ve), 'día')} hubo fotos, pero en ninguna se ve "
-        "la obra: la cámara apuntaba a otra cosa (el cielo, una superficie lisa o un techo) o las fotos estaban "
-        "demasiado oscuras.\n"
-        "- **De noche:** la cámara también toma fotos de noche, pero no sirven para ver la obra. Por eso el "
-        f"calendario muestra solo las horas de luz, de {HORAS_LUZ[0]} a {HORAS_LUZ[-1]} h.\n"
-        "- **Fotos que no sirven:** algunas fotos de día salen empañadas, borrosas, quemadas por el sol o con "
-        "franjas; no se usan, pero casi siempre hay otras útiles el mismo día.\n"
-        "- **La cámara se movió:** "
-        + (f"el {' y el '.join(fecha(c) for c in cambios)} la cámara cambió de posición y la vista ya no es la "
-           "misma, así que comparar fotos de antes y después de esa fecha es menos exacto."
-           if len(cambios) else "la cámara no cambió de posición en todo el periodo.")
-    )
+# ============================================================================
+# Explore por su cuenta y pie
+# ============================================================================
+
+def explora(d: dict) -> None:
+    dias = d["dias"]
+    seccion("Explore por su cuenta", "Compare dos días cualquiera",
+            "Elija dos fechas y deslice la barra; también funciona con las flechas del teclado.")
+    utiles = dias[dias["estado"].eq(UTIL)].reset_index(drop=True)
+    opciones = list(utiles.index)
+    etiqueta = {i: fecha(utiles.at[i, "fecha"], dia_semana=True) for i in opciones}
+    # Por defecto, la última vista de la cámara (la portada ya muestra la primera)
+    ultima = utiles.index[utiles["vista"].eq(utiles["vista"].iloc[-1])]
+    c1, c2 = st.columns(2)
+    i = c1.selectbox("Primera fecha", opciones, index=int(ultima[0]), format_func=etiqueta.get, key="comp_antes")
+    j = c2.selectbox("Segunda fecha", opciones, index=int(ultima[-1]), format_func=etiqueta.get, key="comp_despues")
+    if i == j:
+        st.info("Elija dos fechas distintas para compararlas.")
+        return
+    a, b = utiles.loc[min(i, j)], utiles.loc[max(i, j)]
+    mostrar_comparacion(d, a, b)
+    entre = d["hitos"][(d["hitos"]["fecha_fin"] > a["fecha"]) & (d["hitos"]["fecha_inicio"] < b["fecha"])]
+    if len(entre):
+        st.markdown(f"Entre estas fechas: " + "; ".join(f"{h.numero}. {h.titulo.lower()}" for h in entre.itertuples()) + ".")
 
 
 def pie() -> None:
-    st.divider()
-    st.subheader("Cómo se hizo")
-    st.markdown(
-        "Revisamos todas las fotos de la cámara y descartamos las de noche, las demasiado oscuras, borrosas o "
-        "dañadas y las de los días en que la cámara no apuntaba a la obra. De cada día con fotos útiles elegimos "
-        "una cercana al mediodía. Los cambios en la obra los identificó el equipo a mano, comparando una foto por "
-        "semana y, para precisar la fecha, una foto por día.\n\n"
-        "**Fuente:** fotografías de la Contraloría General de la República (CGR), proyecto dIAra. La CGR confirmó "
-        "que son de uso público.\n\n"
-        f"**Código y datos:** [repositorio del proyecto]({REPO_URL}).\n\n"
-        "Proyecto Integrador III · Visualización de datos, Lead University, 2026."
-    )
+    st.html('<div class="seccion"></div>')
+    with st.expander("Cómo se hizo"):
+        st.markdown(
+            "Se revisaron todas las fotos de la cámara y se descartaron las de noche, las demasiado oscuras, borrosas "
+            "o dañadas y las de los días en que la cámara no apuntaba a la obra. De cada día con fotos útiles se eligió "
+            "una cercana al mediodía. Los cambios se identificaron a mano, comparando una foto por semana y, para "
+            "precisar la fecha, una foto por día. Cuando la cámara se corrió ligeramente, el comparador alinea las "
+            "fotos para que coincidan."
+        )
+    st.caption(f"Fuente: fotografías de la Contraloría General de la República (CGR), proyecto dIAra, de uso público. "
+               f"[Código y datos]({REPO_URL}). Proyecto Integrador III · Visualización de datos, Lead University, 2026.")
 
 
 def main() -> None:
     d = cargar()
-    colores = COLORES[tema()]
-    encabezado(d)
-    acto_contexto(d)
-    acto_lo_que_se_ve(d, colores)
-    acto_lo_que_no_se_ve(d, colores)
+    c = COLORES[tema()]
+    estilos(c)
+    portada(d)
+    historia(d, c)
+    lo_que_no_se_ve(d, c)
+    explora(d)
     pie()
 
 

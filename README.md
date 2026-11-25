@@ -25,6 +25,7 @@ data/
 reports/
   revision_tramos/ # hojas de contacto para revisión visual
   hitos/           # hojas semanales y diarias para identificar hitos de la obra
+  app_v1/, app_v2/ # capturas de la app antes y después del rediseño
 src/               # scripts de procesamiento, en orden numérico
 ```
 
@@ -80,7 +81,7 @@ Ignorar la etiqueta y girar siempre 180° da el mismo resultado en todas las fot
 
 ## App web
 
-`app/streamlit_app.py` es la app del proyecto, para la ciudadanía: cifras clave, la obra y la cámara, lo que se ve (una foto por semana con los cambios identificados, antes y después de cada cambio y un comparador con barra deslizante entre dos fechas) y lo que no se ve (calendario de evidencia por día y hora, resumen por mes y por qué faltan datos).
+`app/streamlit_app.py` es la app del proyecto, para la ciudadanía, con estructura de pieza de periodismo de datos: portada con el hallazgo, un comparador antes/después y tres cifras; recorrido paso a paso por los cambios con una línea de tiempo; lo que no se ve (calendario de evidencia por día y hora de luz, con resumen por mes y por qué faltan datos) y «Explore por su cuenta», un comparador libre entre dos fechas. El tema (tipografía, fondos claro y oscuro) está en `.streamlit/config.toml`; en toda la página el azul significa que hay evidencia de la obra y el bermellón que no la hay.
 
 La app **solo lee archivos de `app/`**, así que funciona sin `data/raw_data`. Esos archivos los genera `06_fotos_app.py`:
 
