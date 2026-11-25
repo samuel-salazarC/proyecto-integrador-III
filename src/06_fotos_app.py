@@ -14,7 +14,8 @@ data/raw_data. Genera:
   app/datos/dias.csv                    un día por fila: estado en lenguaje ciudadano,
                                         vista y foto del día
   app/datos/evidencia_dia_hora.csv      un día y hora (0-23) por fila: estado y número de fotos
-  app/datos/hitos.csv                   hitos con las fotos apuntando a app/fotos
+  app/datos/hitos.csv                   hitos con las fotos apuntando a app/fotos (y la frase
+                                        breve `resumen`, si hitos.csv la trae)
   app/datos/fotos_semanales.csv         foto más nítida de cada semana y vista
   app/datos/vistas.csv                  fechas de cada vista de la cámara
   app/datos/alineacion.csv              corrimiento de la cámara dentro de una misma vista,
@@ -274,8 +275,10 @@ def main() -> None:
     salida_hitos["fecha_hora_despues"] = hitos["ruta_foto_despues"].map(info["fecha_hora"])
     salida_hitos["vista"] = hitos["encuadre_id"].map(vista).astype("Int64")
     salida_hitos = salida_hitos.sort_values(["fecha_inicio", "fecha_fin"])
-    salida_hitos[["fecha_inicio", "fecha_fin", "vista", "titulo", "descripcion", "foto_antes", "foto_despues",
-                  "fecha_hora_antes", "fecha_hora_despues", "confianza"]].to_csv(dir_datos / "hitos.csv", index=False)
+    # resumen: frase breve opcional («se pintan las líneas») para el resumen mensual de la app
+    columnas = ["fecha_inicio", "fecha_fin", "vista", "titulo", "descripcion", "foto_antes", "foto_despues",
+                "fecha_hora_antes", "fecha_hora_despues", "confianza"] + (["resumen"] if "resumen" in hitos else [])
+    salida_hitos[columnas].to_csv(dir_datos / "hitos.csv", index=False)
 
     semanales.assign(foto=semanales["ruta"].map(archivo_app))[
         ["semana_inicio", "vista", "foto", "fecha_hora"]].to_csv(dir_datos / "fotos_semanales.csv", index=False)

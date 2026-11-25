@@ -1,10 +1,13 @@
-"""Puente María Aguilar: lo que muestran las fotos.
+"""Puente sobre el río María Aguilar: lo que muestran las fotos.
 
-App de una página para la ciudadanía, con estructura de pieza de periodismo de datos:
-portada con el hallazgo y un comparador, recorrido paso a paso por los cambios, lo que no
-se ve (calendario de evidencia) y un comparador libre al final («Explore por su cuenta»). Solo lee archivos de app/
-(generados por src/06_fotos_app.py), así que funciona desplegada sin las fotos originales.
-El tema (tipografía y fondos) está en .streamlit/config.toml.
+App de una página para la ciudadanía. De arriba abajo: franja con el nombre, la fuente y la
+fecha de la última foto; portada («Seis meses de obra vistos por una cámara») con el estado de
+la obra según las fotos, un comparador y tres cifras; qué pasó cada mes; recorrido por los cambios; lo que no se ve (calendario de
+evidencia); un comparador libre («Explore por su cuenta») y el alcance del sitio.
+
+Solo lee archivos de app/ (generados por src/06_fotos_app.py), así que funciona desplegada
+sin las fotos originales. Nada depende de un número fijo de hitos: todo se calcula de
+app/datos. El tema (tipografía y fondos) está en .streamlit/config.toml.
 
 Uso local:
   streamlit run app/streamlit_app.py
@@ -25,19 +28,24 @@ import streamlit as st
 APP = Path(__file__).resolve().parent
 DATOS = APP / "datos"
 REPO_URL = "https://github.com/samuel-salazarC/proyecto-integrador-III"
+NOMBRE_OBRA = "Puente sobre el río María Aguilar"
 
 UTIL = "hay foto útil"
 NO_SE_VE = "hay foto pero no se ve la obra"
 SIN_FOTO = "no hay foto"
 ESTADOS = [UTIL, NO_SE_VE, SIN_FOTO]
+# Nombre corto de cada estado en el calendario (clase CSS y leyenda)
+CLAVE_ESTADO = {UTIL: "util", NO_SE_VE: "nose", SIN_FOTO: "sin"}
+LEYENDA = {UTIL: "Con foto útil", NO_SE_VE: "Con foto, sin vista de la obra", SIN_FOTO: "Sin foto"}
 
 # Dos colores con significado fijo en toda la página: azul = hay evidencia de la obra,
 # bermellón = no hay evidencia (sólido: no hay foto; tenue: hay foto pero no se ve la obra).
 # Azul/bermellón validados para daltonismo (Okabe-Ito); el resto son neutros del tema.
+# En el calendario, además del color, cada estado tiene su forma: relleno, rayado o contorno.
 COLORES = {
-    "light": {"si": "#0072B2", "no": "#D55E00", "no_suave": "#F0B48C", "tinta": "#1A1A19",
+    "light": {"si": "#0072B2", "si_texto": "#FFFFFF", "no": "#D55E00", "no_suave": "#F0B48C", "tinta": "#1A1A19",
               "tenue": "#66635C", "fondo": "#FBFAF7", "borde": "#DEDBD3", "hueco": "rgba(213,94,0,0.13)"},
-    "dark": {"si": "#3D9BE0", "no": "#E8743B", "no_suave": "#7E3A16", "tinta": "#EDEBE6",
+    "dark": {"si": "#3D9BE0", "si_texto": "#10100F", "no": "#E8743B", "no_suave": "#7E3A16", "tinta": "#EDEBE6",
              "tenue": "#A8A59D", "fondo": "#141413", "borde": "#3A3936", "hueco": "rgba(232,116,59,0.20)"},
 }
 COLOR_ESTADO = {UTIL: "si", NO_SE_VE: "no_suave", SIN_FOTO: "no"}
@@ -46,15 +54,22 @@ MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "
 MESES_LARGO = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
                "septiembre", "octubre", "noviembre", "diciembre"]
 DIAS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+DIAS_LARGO = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 NUMEROS = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez",
            "once", "doce", "trece", "catorce", "quince", "dieciséis", "diecisiete", "dieciocho",
            "diecinueve", "veinte"]
-HORAS_LUZ = range(6, 18)  # el calendario muestra de 6:00 a 17:59; de noche no se ve la obra
-# Hito que marca el puente en uso, para el titular de portada ("En N semanas, un hueco se
-# convirtió en un puente"): se busca esta palabra en el título. Si no está, titular genérico.
+HORAS_LUZ = range(6, 18)  # el detalle por hora muestra de 6:00 a 17:59; de noche no se ve la obra
+# Hito que marca el puente en uso (frase de estado y cifras de portada): se busca esta palabra
+# en el título. Si ningún hito la tiene, la portada usa el último cambio visible.
 PALABRA_PUENTE_EN_USO = "vehículos"
+# Marco común de todas las fotos (comparadores y pares antes/después). Las fotos de app/fotos
+# miden 960 × 768 px: el contenido de la página no pasa de 960 px para no ampliarlas.
+FOTO_RADIO = "10px"
+FOTO_PROPORCION = "5 / 4"
+ANCHO_CONTENIDO = 960
 
-st.set_page_config(page_title="Puente María Aguilar: lo que muestran las fotos", page_icon="🌉", layout="wide")
+st.set_page_config(page_title="Puente sobre el río María Aguilar: lo que muestran las fotos", page_icon="🌉",
+                   layout="wide")
 
 
 # ============================================================================
@@ -66,15 +81,15 @@ def cargar() -> dict[str, pd.DataFrame]:
     dias = pd.read_csv(DATOS / "dias.csv", parse_dates=["fecha", "fecha_hora_foto"])
     horas = pd.read_csv(DATOS / "evidencia_dia_hora.csv", parse_dates=["fecha"])
     hitos = pd.read_csv(DATOS / "hitos.csv", parse_dates=["fecha_inicio", "fecha_fin", "fecha_hora_antes", "fecha_hora_despues"])
-    semanas = pd.read_csv(DATOS / "fotos_semanales.csv", parse_dates=["semana_inicio", "fecha_hora"])
     vistas = pd.read_csv(DATOS / "vistas.csv", parse_dates=["fecha_inicio", "fecha_fin"])
     alineacion = pd.read_csv(DATOS / "alineacion.csv", parse_dates=["fecha"])
-    for tabla in (dias, hitos, semanas, vistas, alineacion):
+    for tabla in (dias, hitos, vistas, alineacion):
         tabla["vista"] = tabla["vista"].astype("Int64")
     hitos = hitos.sort_values(["fecha_inicio", "fecha_fin"]).reset_index(drop=True)
     hitos["numero"] = range(1, len(hitos) + 1)
-    return {"dias": dias, "horas": horas, "hitos": hitos, "semanas": semanas, "vistas": vistas,
-            "alineacion": alineacion}
+    if "resumen" not in hitos:
+        hitos["resumen"] = pd.NA
+    return {"dias": dias, "horas": horas, "hitos": hitos, "vistas": vistas, "alineacion": alineacion}
 
 
 @st.cache_data
@@ -94,13 +109,29 @@ def cambios_de_vista(vistas: pd.DataFrame) -> pd.Series:
     return vistas.sort_values("fecha_inicio")["fecha_inicio"].iloc[1:]
 
 
+def hito_en_uso(hitos: pd.DataFrame) -> pd.Series | None:
+    en_uso = hitos[hitos["titulo"].str.contains(PALABRA_PUENTE_EN_USO, case=False, na=False)]
+    return None if en_uso.empty else en_uso.iloc[0]
+
+
+def ultima_foto(dias: pd.DataFrame) -> pd.Timestamp:
+    return dias.loc[dias["fotos"].gt(0), "fecha"].max()
+
+
 # ============================================================================
 # Formato en lenguaje ciudadano
 # ============================================================================
 
 def fecha(f: pd.Timestamp, dia_semana: bool = False, anio: bool = True) -> str:
+    """Fecha corta: '19 nov 2025' (con dia_semana: 'mié 19 nov 2025')."""
     texto = f"{f.day} {MESES[f.month - 1]}" + (f" {f.year}" if anio else "")
     return f"{DIAS[f.weekday()]} {texto}" if dia_semana else texto
+
+
+def fecha_larga(f: pd.Timestamp, dia_semana: bool = False) -> str:
+    """Fecha para leer en una frase: '19 de noviembre de 2025'."""
+    texto = f"{f.day} de {MESES_LARGO[f.month - 1]} de {f.year}"
+    return f"{DIAS_LARGO[f.weekday()]} {texto}" if dia_semana else texto
 
 
 def rango(a: pd.Timestamp, b: pd.Timestamp) -> str:
@@ -113,22 +144,32 @@ def rango(a: pd.Timestamp, b: pd.Timestamp) -> str:
     return f"{fecha(a)} – {fecha(b)}"
 
 
+def rango_largo(a: pd.Timestamp, b: pd.Timestamp) -> str:
+    """'del 6 de febrero al 3 de marzo de 2026' (el año se repite solo si cambia)."""
+    inicio = f"{a.day} de {MESES_LARGO[a.month - 1]}" + ("" if a.year == b.year else f" de {a.year}")
+    return f"del {inicio} al {fecha_larga(b)}"
+
+
 def hora(f: pd.Timestamp) -> str:
     return f"{f.hour}:{f.minute:02d}"
-
-
-def miles(n: int) -> str:
-    """1804 -> '1 804' (separador de miles con espacio)."""
-    return f"{n:,}".replace(",", " ")
 
 
 def plural(n: int, singular: str, plural_: str | None = None) -> str:
     return f"{n} {singular if n == 1 else (plural_ or singular + 's')}"
 
 
-def palabra(n: int, mayuscula: bool = False) -> str:
+def palabra(n: int, mayus: bool = False) -> str:
     texto = NUMEROS[n] if 0 <= n < len(NUMEROS) else str(n)
-    return texto[:1].upper() + texto[1:] if mayuscula else texto
+    return mayuscula(texto) if mayus else texto
+
+
+def mayuscula(texto: str) -> str:
+    return texto[:1].upper() + texto[1:]
+
+
+def enumerar(partes: list[str]) -> str:
+    """['a', 'b', 'c'] -> 'a, b y c'."""
+    return partes[0] if len(partes) == 1 else ", ".join(partes[:-1]) + " y " + partes[-1]
 
 
 def primera_frase(texto: str) -> str:
@@ -136,8 +177,8 @@ def primera_frase(texto: str) -> str:
 
 
 def alt_foto(f: pd.Timestamp, extra: str = "") -> str:
-    return (f"Foto de la cámara tomada el {fecha(f, dia_semana=True)} a las {hora(f)}: "
-            f"vista del Puente María Aguilar y la vía a su alrededor.{(' ' + extra) if extra else ''}")
+    return (f"Foto de la cámara tomada el {fecha_larga(f, dia_semana=True)} a las {hora(f)}: "
+            f"vista del puente sobre el río María Aguilar y la vía a su alrededor.{(' ' + extra) if extra else ''}")
 
 
 def tema() -> str:
@@ -153,48 +194,82 @@ def tema() -> str:
 
 def estilos(c: dict) -> None:
     st.html(f"""<style>
-[data-testid="stMainBlockContainer"] {{ max-width: 1000px; padding: 2.5rem 1.25rem 5rem; }}
+[data-testid="stMainBlockContainer"] {{ max-width: {ANCHO_CONTENIDO + 40}px; padding: 2rem 1.25rem 5rem; }}
 h1, h2, h3 {{ font-family: "Source Serif 4", Georgia, serif !important; }}
 [data-testid="stHeadingWithActionElements"] h2, [data-testid="stHeadingWithActionElements"] h3 {{ padding-top: 0.2rem !important; }}
-h1 {{ font-size: clamp(2.2rem, 1.3rem + 3.8vw, 3.75rem) !important; line-height: 1.05 !important;
-      letter-spacing: -0.02em; padding-bottom: 0.4rem !important; }}
-h2 {{ font-size: clamp(1.65rem, 1.15rem + 2.1vw, 2.5rem) !important; line-height: 1.1 !important;
-      letter-spacing: -0.01em; }}
+h1 {{ font-size: clamp(2.2rem, 1.3rem + 3.8vw, 3.6rem) !important; line-height: 1.05 !important;
+      letter-spacing: -0.02em; padding-bottom: 0.3rem !important; }}
+h2 {{ font-size: clamp(1.6rem, 1.15rem + 2vw, 2.4rem) !important; line-height: 1.1 !important; letter-spacing: -0.01em; }}
 h3 {{ font-size: clamp(1.3rem, 1.05rem + 1vw, 1.7rem) !important; line-height: 1.2 !important; }}
 [data-testid="stMarkdownContainer"] p, [data-testid="stCaptionContainer"] p {{ max-width: 68ch; }}
+
+/* Franja superior */
+.franja {{ display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 1.5rem; padding: 0 0 0.75rem;
+           border-bottom: 1px solid {c['borde']}; font-size: 0.88rem; line-height: 1.4; color: {c['tenue']}; }}
+.franja b {{ color: {c['tinta']}; font-weight: 700; }}
+.franja .datos {{ display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; }}
+.franja .datos span {{ white-space: nowrap; }}
+
+/* Textos */
 .kicker {{ text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.78rem; font-weight: 700;
            color: {c['tenue']}; margin: 0; }}
 .bajada {{ font-size: clamp(1.08rem, 1rem + 0.4vw, 1.3rem); line-height: 1.45; color: {c['tenue']};
-           max-width: 60ch; margin: 0 0 0.5rem; }}
-.seccion {{ margin: 3.5rem 0 1.25rem; border-top: 1px solid {c['borde']}; }}
-.cifras {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem 1.5rem; margin: 0.5rem 0; }}
+           max-width: 60ch; margin: 0; }}
+.estado {{ font-size: clamp(1.15rem, 1.02rem + 0.55vw, 1.4rem); line-height: 1.4; color: {c['tinta']};
+           max-width: 52ch; margin: 0; }}
+.estado::before {{ content: ""; display: inline-block; width: 0.6em; height: 0.6em; border-radius: 50%;
+                   background: {c['si']}; margin-right: 0.5em; vertical-align: 0.08em; }}
+/* Espacio uniforme entre secciones: cada sección empieza con este separador */
+.seccion {{ margin: 3.5rem 0 1rem; border-top: 1px solid {c['borde']}; }}
+
+/* Cifras de portada */
+.cifras {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem 1.5rem; margin: 0.25rem 0 0; }}
 .cifra {{ border-top: 3px solid {c['borde']}; padding-top: 0.6rem; }}
 .cifra.si {{ border-top-color: {c['si']}; }} .cifra.no {{ border-top-color: {c['no']}; }}
 .cifra .num {{ display: block; font-family: "Source Serif 4", serif; font-weight: 700; line-height: 1;
-              font-size: clamp(2.2rem, 1.6rem + 2vw, 3rem); color: {c['tinta']}; }}
-.cifra.si .num {{ color: {c['si']}; }} .cifra.no .num {{ color: {c['no']}; }}
-.cifra .txt {{ display: block; margin-top: 0.3rem; font-size: 0.95rem; line-height: 1.35; color: {c['tenue']}; }}
+              font-size: clamp(2rem, 1.5rem + 1.8vw, 2.75rem); color: {c['tinta']}; }}
+.cifra .num small {{ font-size: 0.5em; font-weight: 600; margin-left: 0.2em; }}
+.cifra .txt {{ display: block; margin-top: 0.35rem; font-size: 0.95rem; line-height: 1.35; color: {c['tenue']}; }}
 @media (max-width: 640px) {{
-  .cifras {{ grid-template-columns: 1fr; }}
-  .cifra {{ display: grid; grid-template-columns: 5.5rem 1fr; align-items: baseline; gap: 0.75rem; }}
-  .cifra .txt {{ margin-top: 0; }}
+  .cifras {{ grid-template-columns: 1fr; gap: 1rem; }}
 }}
-.claridad {{ display: inline-block; margin: 0.4rem 0 0; padding: 0.3rem 0.75rem; border: 1px solid {c['borde']};
+
+/* Qué pasó cada mes */
+.meses-resumen {{ margin: 0 !important; padding: 0 !important; }}
+.meses-resumen > div {{ margin: 0; display: grid; grid-template-columns: 11rem 1fr; gap: 0.15rem 1.25rem;
+                        padding: 0.6rem 0; border-top: 1px solid {c['borde']}; }}
+.meses-resumen > div:last-child {{ border-bottom: 1px solid {c['borde']}; }}
+.meses-resumen dt {{ font-weight: 700; }}
+.meses-resumen dd {{ margin: 0; line-height: 1.45; max-width: 62ch; }}
+.meses-resumen .falta {{ color: {c['tenue']}; }}
+@media (max-width: 640px) {{ .meses-resumen > div {{ grid-template-columns: 1fr; }} }}
+
+/* Recorrido por los cambios */
+.claridad {{ display: inline-block; margin: 0; padding: 0.3rem 0.75rem; border: 1px solid {c['borde']};
              border-radius: 999px; font-size: 0.9rem; color: {c['tenue']}; }}
 .claridad b {{ color: {c['tinta']}; }}
 .paso {{ font-variant-numeric: tabular-nums; font-weight: 700; text-align: center; margin: 0; }}
+.alcance {{ margin: 0; font-size: 0.95rem; color: {c['tinta']}; max-width: 68ch; }}
 .leyenda {{ display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; font-size: 0.9rem; color: {c['tenue']}; margin: 0.25rem 0; }}
 .leyenda span::before {{ content: ""; display: inline-block; width: 0.85em; height: 0.85em; margin-right: 0.4em;
                         vertical-align: -0.05em; border-radius: 2px; background: var(--c); border: 1px solid {c['borde']}; }}
+
+/* Un solo marco para todas las fotos: misma proporción, esquinas y borde; sin ampliar más
+   allá de su tamaño real (también en pantalla completa). */
+[data-testid="stImage"] img {{ aspect-ratio: {FOTO_PROPORCION}; object-fit: cover; border-radius: {FOTO_RADIO};
+                               border: 1px solid {c['borde']}; box-sizing: border-box; max-width: {ANCHO_CONTENIDO}px; }}
+[data-testid="stImage"] [data-testid="stImageCaption"], [data-testid="stImage"] + div p {{ font-size: 0.88rem; }}
+/* Un solo estilo de botones: el secundario del tema, con zona táctil de 44 px */
+.stButton button {{ min-height: 44px; padding: 0.4rem 1rem; }}
 </style>""")
 
 
-def seccion(kicker: str, titular: str, bajada: str | None = None) -> None:
-    """Encabezado de sección: rótulo pequeño, titular con la conclusión y como máximo dos frases."""
-    st.html(f'<div class="seccion"></div><p class="kicker">{html.escape(kicker)}</p>')
+def seccion(kicker: str, titular: str, frase: str | None = None) -> None:
+    """Encabezado de sección: rótulo, titular con la conclusión y como máximo una frase."""
+    st.html(f'<div class="seccion" aria-hidden="true"></div><p class="kicker">{html.escape(kicker)}</p>')
     st.header(titular, anchor=False)
-    if bajada:
-        st.html(f'<p class="bajada">{html.escape(bajada)}</p>')
+    if frase:
+        st.html(f'<p class="bajada">{html.escape(frase)}</p>')
 
 
 # ============================================================================
@@ -233,14 +308,15 @@ def ajuste_css(corrimientos: pd.DataFrame) -> dict | None:
             "zoom": zoom, "vx": ventana_x / ancho * 100, "vy": ventana_y / alto * 100}
 
 
-def html_comparador(a: pd.Series, b: pd.Series, texto_a: str, texto_b: str, ajuste: dict | None = None) -> str:
+def html_comparador(a: pd.Series, b: pd.Series, texto_a: str, texto_b: str, c: dict, ajuste: dict | None = None) -> str:
     """Comparador antes/después con barra deslizante, sin dependencias externas.
 
     La foto de después ocupa todo el cuadro y la de antes se recorta desde la izquierda
     hasta la posición de la barra. La barra es un <input type="range"> transparente sobre
     las fotos: se arrastra con el mouse o el dedo y se mueve con las flechas del teclado.
     Con `ajuste`, la foto de después se mueve para coincidir con la de antes y las dos se
-    amplían un poco para ocultar los bordes sin imagen.
+    amplían un poco para ocultar los bordes sin imagen. El marco (proporción, esquinas y
+    borde) es el mismo de las demás fotos de la página.
     """
     aj = ajuste or {"tx": 0, "ty": 0, "rot": 0, "escala": 1, "zoom": 1, "vx": 0, "vy": 0}
     alt_a = html.escape(alt_foto(a["fecha_hora_foto"], "Foto de la izquierda (antes)."))
@@ -248,7 +324,9 @@ def html_comparador(a: pd.Series, b: pd.Series, texto_a: str, texto_b: str, ajus
     etiqueta = html.escape(f"Barra de comparación: a la izquierda {texto_a}, a la derecha {texto_b}")
     return f"""<!doctype html><html lang="es"><head><meta charset="utf-8"><style>
 html, body {{ margin:0; padding:0; background:transparent; font-family:system-ui, sans-serif; }}
-.comp {{ position:relative; width:100%; overflow:hidden; border-radius:10px; line-height:0; user-select:none; touch-action:pan-y; }}
+.comp {{ position:relative; width:100%; max-width:{ANCHO_CONTENIDO}px; aspect-ratio:{FOTO_PROPORCION}; overflow:hidden;
+        border-radius:{FOTO_RADIO}; border:1px solid {c['borde']}; box-sizing:border-box; line-height:0;
+        user-select:none; touch-action:pan-y; }}
 .comp .lienzo {{ position:relative; transform-origin:0 0; transform:scale({aj['zoom']:.5f}) translate({-aj['vx']:.4f}%, {-aj['vy']:.4f}%); }}
 .comp img {{ width:100%; height:auto; display:block; }}
 .comp .despues {{ transform-origin:50% 50%;
@@ -259,11 +337,11 @@ html, body {{ margin:0; padding:0; background:transparent; font-family:system-ui
 .comp .asa {{ position:absolute; top:50%; left:50%; width:44px; height:44px; margin:-22px 0 0 -22px; border-radius:50%;
              background:#fff; box-shadow:0 1px 8px rgba(0,0,0,.55); pointer-events:none; display:flex; align-items:center;
              justify-content:center; font:700 18px/1 system-ui, sans-serif; color:#1a1a19; }}
-.comp .rotulo {{ position:absolute; top:10px; padding:5px 9px; border-radius:4px; background:rgba(20,20,19,.78); color:#fff;
+.comp .rotulo {{ position:absolute; top:10px; padding:5px 9px; border-radius:4px; background:rgba(20,20,19,.8); color:#fff;
                 font:600 13px/1.2 system-ui, sans-serif; pointer-events:none; }}
 .comp .izq {{ left:10px; }} .comp .der {{ right:10px; }}
 .comp input {{ position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:ew-resize; }}
-.comp:has(input:focus-visible) {{ outline:3px solid #0072B2; outline-offset:3px; }}
+.comp:has(input:focus-visible) {{ outline:3px solid {c['tinta']}; outline-offset:-3px; }}
 </style></head><body>
 <div class="comp">
   <div class="lienzo">
@@ -271,7 +349,8 @@ html, body {{ margin:0; padding:0; background:transparent; font-family:system-ui
     <img class="antes" src="data:image/jpeg;base64,{imagen_base64(a['foto'])}" alt="{alt_a}">
   </div>
   <div class="linea"></div><div class="asa" aria-hidden="true">&#8596;</div>
-  <span class="rotulo izq">{html.escape(texto_a)}</span><span class="rotulo der">{html.escape(texto_b)}</span>
+  <span class="rotulo izq" aria-hidden="true">{html.escape(texto_a)}</span>
+  <span class="rotulo der" aria-hidden="true">{html.escape(texto_b)}</span>
   <input type="range" min="0" max="100" step="1" value="50" aria-label="{etiqueta}">
 </div>
 <script>
@@ -288,71 +367,162 @@ r.addEventListener('input', mover); mover();
 </script></body></html>"""
 
 
-def mostrar_comparacion(d: dict, a: pd.Series, b: pd.Series) -> None:
-    """Deslizador si las dos fechas son de la misma vista; si no, las dos fotos lado a lado con aviso."""
-    texto_a = f"{fecha(a['fecha_hora_foto'])}, {hora(a['fecha_hora_foto'])}"
-    texto_b = f"{fecha(b['fecha_hora_foto'])}, {hora(b['fecha_hora_foto'])}"
+def mostrar_comparacion(d: dict, c: dict, a: pd.Series, b: pd.Series) -> None:
+    """Deslizador si las dos fechas son de la misma vista; si no, las dos fotos lado a lado con aviso.
+    Sin notas debajo: los rótulos de las fotos ya dicen las fechas."""
+    texto_a, texto_b = fecha(a["fecha"]), fecha(b["fecha"])
     if a["vista"] == b["vista"]:
-        corrimientos = corrimientos_entre(d["alineacion"], a, b)
-        ajuste = ajuste_css(corrimientos)
-        st.iframe(html_comparador(a, b, texto_a, texto_b, ajuste), height="content")
-        nota = (f"Izquierda: {fecha(a['fecha'], dia_semana=True)}. Derecha: {fecha(b['fecha'], dia_semana=True)}. "
-                "Misma vista de la cámara: lo que cambia es la obra.")
-        if len(corrimientos):
-            nota += (" La cámara se corrió ligeramente entre estas fechas"
-                     + ("; la foto de la derecha se ajustó para que coincidan." if ajuste else "."))
-        st.caption(nota)
+        ajuste = ajuste_css(corrimientos_entre(d["alineacion"], a, b))
+        st.iframe(html_comparador(a, b, texto_a, texto_b, c, ajuste), height="content")
     else:
-        st.warning("La cámara se movió entre estas fechas, la comparación no es exacta.", icon="⚠️")
-        for col, fila, texto in zip(st.columns(2), [a, b], [texto_a, texto_b]):
+        st.warning("La cámara apuntaba a otro lugar en una de estas fechas: las fotos no se pueden superponer.",
+                   icon="⚠️")
+        for col, fila, texto in zip(st.columns(2, gap="medium"), [a, b], [texto_a, texto_b]):
             col.image(str(APP / fila["foto"]), width="stretch", alt=alt_foto(fila["fecha_hora_foto"]), caption=texto)
 
 
 # ============================================================================
-# Portada
+# Franja superior y portada
 # ============================================================================
 
-def titular_portada(hitos: pd.DataFrame) -> tuple[str, str | None]:
-    """Titular con el hallazgo y la frase que lo respalda, calculados de hitos.csv."""
-    en_uso = hitos[hitos["titulo"].str.contains(PALABRA_PUENTE_EN_USO, case=False, na=False)]
-    if hitos.empty or en_uso.empty:
-        return "Así cambió la obra del Puente María Aguilar", None
-    primero, uso = hitos.iloc[0], en_uso.iloc[0]
-    semanas = round((uso["fecha_fin"] - primero["fecha_inicio"]).days / 7)
-    respaldo = (f"Del cambio «{primero['titulo'].lower()}» ({fecha(primero['fecha_inicio'], anio=False)}) "
-                f"a «{uso['titulo'].lower()}» ({fecha(uso['fecha_fin'])}) pasaron {palabra(semanas)} semanas.")
-    return f"En {palabra(semanas)} semanas, un hueco se convirtió en un puente", respaldo
+def franja(dias: pd.DataFrame) -> None:
+    st.html(f"""<header class="franja">
+  <b>{NOMBRE_OBRA}</b>
+  <span class="datos"><span>Fotos: CGR, proyecto dIAra</span><span>Última foto: {fecha(ultima_foto(dias))}</span></span>
+</header>""")
 
 
-def portada(d: dict) -> None:
+def titular_portada(dias: pd.DataFrame) -> str:
+    """'Seis meses de obra vistos por una cámara': meses entre la primera y la última foto.
+    El nombre del puente no se repite: ya está en la franja superior."""
+    dias_con_foto = dias.loc[dias["fotos"].gt(0), "fecha"]
+    meses = round((dias_con_foto.max() - dias_con_foto.min()).days / 30.44)
+    if meses < 2:
+        return "La obra vista por una cámara"
+    return f"{palabra(meses, True)} meses de obra vistos por una cámara"
+
+
+def frase_estado(hitos: pd.DataFrame) -> str | None:
+    """Estado de la obra según lo que se ve en las fotos, calculado de hitos.csv."""
+    uso = hito_en_uso(hitos)
+    if uso is not None:
+        return f"En las fotos circulan vehículos sobre el puente desde el {fecha_larga(uso['fecha_fin'])}."
+    if len(hitos):
+        ultimo = hitos.sort_values("fecha_fin").iloc[-1]
+        return f"Último cambio visible en las fotos: {ultimo['titulo'][:1].lower() + ultimo['titulo'][1:]}, " \
+               f"el {fecha_larga(ultimo['fecha_fin'])}."
+    return None
+
+
+def cifras_portada(dias: pd.DataFrame, hitos: pd.DataFrame) -> list[tuple[str, str, str, str]]:
+    """(clase, número, unidad, texto) de cada cifra, calculadas de los datos. No repiten la
+    franja (última foto) ni la frase de estado (fecha de los primeros vehículos)."""
+    cifras = []
+    uso = hito_en_uso(hitos)
+    if uso is not None:
+        primero = hitos.iloc[0]
+        semanas = round((uso["fecha_fin"] - primero["fecha_inicio"]).days / 7)
+        cifras.append(("si", str(semanas), "semanas" if semanas != 1 else "semana",
+                       f"entre el primer cambio visible ({fecha(primero['fecha_inicio'], anio=False)}) "
+                       "y los primeros vehículos"))
+    if len(hitos):
+        cifras.append(("si", str(len(hitos)), "cambios" if len(hitos) != 1 else "cambio",
+                       f"visibles en las fotos, {rango(hitos['fecha_inicio'].min(), hitos['fecha_fin'].max())}"))
+    tramos = tramos_sin_evidencia(dias)
+    if len(tramos):
+        hueco = tramos.iloc[0]
+        cifras.append(("no", str(int(hueco["dias"])), "días" if hueco["dias"] != 1 else "día",
+                       f"seguidos sin fotos de la obra, {rango(hueco['inicio'], hueco['fin'])}"))
+    return cifras
+
+
+def portada(d: dict, c: dict) -> None:
     dias, hitos = d["dias"], d["hitos"]
-    titular, respaldo = titular_portada(hitos)
-    st.html('<p class="kicker">Puente María Aguilar · lo que muestran las fotos</p>')
-    st.title(titular, anchor=False)
-    st.html('<p class="bajada">¿Qué cambió en la obra, cuándo ocurrió y qué días no hay fotos para saberlo? '
-            'Deslice la barra sobre la foto.</p>')
+    st.title(titular_portada(dias), anchor=False)
+    estado = frase_estado(hitos)
+    if estado:
+        st.html(f'<p class="estado">{html.escape(estado)}</p>')
 
     # Comparador de portada: primer y último día con foto útil de la primera vista
     utiles = dias[dias["estado"].eq(UTIL)]
     primera_vista = utiles[utiles["vista"].eq(utiles["vista"].iloc[0])]
-    mostrar_comparacion(d, primera_vista.iloc[0], primera_vista.iloc[-1])
-    if respaldo:
-        st.caption(respaldo)
+    mostrar_comparacion(d, c, primera_vista.iloc[0], primera_vista.iloc[-1])
 
-    n_util = int(dias["estado"].eq(UTIL).sum())
-    hueco = tramos_sin_evidencia(dias).iloc[0]
-    st.html(f"""<div class="cifras" role="list">
-  <div class="cifra si" role="listitem"><span class="num">{n_util}</span>
-    <span class="txt">de {len(dias)} días con fotos útiles de la obra ({rango(dias['fecha'].min(), dias['fecha'].max())})</span></div>
-  <div class="cifra no" role="listitem"><span class="num">{int(hueco['dias'])}</span>
-    <span class="txt">días seguidos sin evidencia, del {fecha(hueco['inicio'], anio=False)} al {fecha(hueco['fin'])}</span></div>
-  <div class="cifra" role="listitem"><span class="num">{len(hitos)}</span>
-    <span class="txt">cambios visibles en la obra, revisados a mano</span></div>
-</div>""")
+    items = "".join(
+        f'<div class="cifra {clase}" role="listitem"><span class="num">{html.escape(num)}<small>{html.escape(unidad)}</small>'
+        f'</span><span class="txt">{html.escape(texto)}</span></div>'
+        for clase, num, unidad, texto in cifras_portada(dias, hitos))
+    st.html(f'<div class="cifras" role="list">{items}</div>')
 
 
 # ============================================================================
-# Historia guiada de los cambios
+# Qué pasó cada mes
+# ============================================================================
+
+def frase_hito(h) -> str:
+    """Frase breve del hito ('se pintan las líneas'); si hitos.csv no la trae, el título."""
+    if isinstance(h.resumen, str) and h.resumen.strip():
+        return h.resumen.strip()
+    return h.titulo[:1].lower() + h.titulo[1:]
+
+
+def dias_sin_evidencia_mes(g: pd.DataFrame) -> str | None:
+    """'Sin fotos de la obra del 11 al 13 y del 20 al 21.' para los días de un mes (g)."""
+    sin = g["estado"].ne(UTIL).to_numpy()
+    if not sin.any():
+        return None
+    if sin.all():
+        return "Sin fotos de la obra en todo el mes."
+    fechas = g["fecha"].tolist()
+    primero, ultimo = fechas[0], fechas[-1]
+    partes, k = [], 0
+    while k < len(fechas):
+        if not sin[k]:
+            k += 1
+            continue
+        j = k
+        while j + 1 < len(fechas) and sin[j + 1]:
+            j += 1
+        a, b = fechas[k], fechas[j]
+        if a == b:
+            partes.append(f"el día {a.day}")
+        elif a == primero and a.day == 1:
+            partes.append(f"hasta el día {b.day}")
+        elif b == ultimo and b.day == b.days_in_month:
+            partes.append(f"desde el día {a.day}")
+        else:
+            partes.append(f"del {a.day} al {b.day}")
+        k = j + 1
+    return f"Sin fotos de la obra {enumerar(partes)}."
+
+
+def resumen_mensual(d: dict) -> list[tuple[str, str, str | None]]:
+    """(mes, lo que cambió, días sin evidencia) por cada mes del periodo."""
+    dias, hitos = d["dias"], d["hitos"]
+    vistas = cambios_de_vista(d["vistas"])
+    filas = []
+    for periodo, g in dias.groupby(dias["fecha"].dt.to_period("M")):
+        del_mes = hitos[hitos["fecha_fin"].dt.to_period("M").eq(periodo)]
+        cambios = (mayuscula(enumerar([frase_hito(h) for h in del_mes.itertuples()])) + "."
+                   if len(del_mes) else "Sin cambios visibles en las fotos.")
+        for f in vistas[vistas.dt.to_period("M").eq(periodo)]:
+            cambios += f" El día {f.day} la cámara empieza a mostrar otra vista."
+        filas.append((f"{mayuscula(MESES_LARGO[periodo.month - 1])} de {periodo.year}", cambios,
+                      dias_sin_evidencia_mes(g)))
+    return filas
+
+
+def cada_mes(d: dict) -> None:
+    seccion("Mes a mes", "Qué pasó cada mes")
+    filas = "".join(
+        f'<div><dt>{html.escape(mes)}</dt><dd>{html.escape(cambios)}'
+        + (f' <span class="falta">{html.escape(falta)}</span>' if falta else "") + "</dd></div>"
+        for mes, cambios, falta in resumen_mensual(d))
+    st.html(f'<dl class="meses-resumen">{filas}</dl>')
+
+
+# ============================================================================
+# Recorrido por los cambios
 # ============================================================================
 
 def titular_cambios(hitos: pd.DataFrame) -> str:
@@ -362,9 +532,8 @@ def titular_cambios(hitos: pd.DataFrame) -> str:
     por_mes = hitos.groupby(hitos["fecha_fin"].dt.to_period("M")).size()
     mes, k = por_mes.idxmax(), int(por_mes.max())
     if n >= 3 and k >= 2 and k > n / 3:
-        return (f"{palabra(n, True)} cambios visibles; {palabra(k)} de ellos en "
-                f"{MESES_LARGO[mes.month - 1]} de {mes.year}")
-    return f"{palabra(n, True)} cambios visibles entre {fecha(hitos['fecha_inicio'].min())} y {fecha(hitos['fecha_fin'].max())}"
+        return f"{palabra(n, True)} cambios visibles; {palabra(k)} de ellos en {MESES_LARGO[mes.month - 1]} de {mes.year}"
+    return f"{palabra(n, True)} {'cambio visible' if n == 1 else 'cambios visibles'} entre {fecha(hitos['fecha_inicio'].min())} y {fecha(hitos['fecha_fin'].max())}"
 
 
 def eje_meses(fig: go.Figure, inicio: pd.Timestamp, fin: pd.Timestamp) -> None:
@@ -380,15 +549,12 @@ def eje_meses(fig: go.Figure, inicio: pd.Timestamp, fin: pd.Timestamp) -> None:
 # cambio. Plotly no sirve aquí: en pantallas táctiles emite el clic pero no la selección, así
 # que tocar un punto no llevaba al cambio. Con botones funciona igual con el dedo, el mouse y
 # el teclado (Tab y Enter). Las filas se reparten en el navegador según el ancho real, para
-# que los puntos no se toquen en el celular.
+# que los puntos no se toquen. En pantallas angostas (menos de ANGOSTO px) los puntos se
+# apilarían: se muestra en cambio una fila de botones numerados de 44 px que salta de línea,
+# con la misma etiqueta y la misma marca del cambio elegido. El cambio elegido se nombra
+# debajo (titular).
 LINEA_CSS = """
 .linea { font-family: var(--st-font, sans-serif); color: var(--st-text-color); }
-.linea .elegido { margin: 0 0 0.6rem; font-size: 1rem; line-height: 1.35; min-height: 2.7em; }
-.linea .elegido b { font-weight: 700; }
-.linea .elegido .num { display: inline-block; min-width: 1.6em; height: 1.6em; line-height: 1.6em; border-radius: 50%;
-  text-align: center; font-weight: 700; font-size: 0.85rem; margin-right: 0.45em;
-  background: var(--st-text-color); color: var(--st-background-color); }
-.linea .elegido .fecha { opacity: 0.72; white-space: nowrap; }
 .linea .lienzo { position: relative; }
 .linea .hueco { position: absolute; top: 0; bottom: 30px; border-radius: 4px; }
 .linea .hueco span { position: absolute; top: 4px; left: 0; right: 0; text-align: center; font-size: 0.72rem;
@@ -405,13 +571,17 @@ LINEA_CSS = """
 .linea button[aria-current="step"] { background: var(--st-text-color); color: var(--st-background-color);
   width: 36px; height: 36px; margin: -18px 0 0 -18px; }
 .linea button:hover { box-shadow: 0 0 0 4px color-mix(in srgb, var(--st-text-color) 18%, transparent); }
-.linea button:focus-visible { outline: 3px solid #0072B2; outline-offset: 3px; }
+.linea button:focus-visible { outline: 3px solid var(--st-text-color); outline-offset: 3px; }
+.linea .botones { display: flex; flex-wrap: wrap; gap: 8px; }
+.linea .botones button { position: static; width: 44px; height: 44px; margin: 0; font-size: 0.95rem; }
+.linea .botones button[aria-current="step"] { width: 44px; height: 44px; margin: 0; }
+.linea .botones button::after { display: none; }
 """
 
 LINEA_JS = """
 export default function (component) {
   const { data, setTriggerValue, parentElement } = component;
-  const SEPARACION = 44, FILA = 46, EJE = 30, ARRIBA = 30;
+  const SEPARACION = 44, FILA = 46, EJE = 30, ARRIBA = 30, ANGOSTO = 640;
   // Streamlit vuelve a llamar a esta función cuando cambian los datos: se quita lo anterior
   parentElement.querySelectorAll('.linea').forEach((e) => e.remove());
   const raiz = document.createElement('div');
@@ -420,8 +590,23 @@ export default function (component) {
   raiz.setAttribute('aria-label', 'Línea de tiempo de los cambios');
   parentElement.appendChild(raiz);
 
+  const boton = (p, estilo) => '<button type="button" data-n="' + p.n + '"' + (estilo ? ' style="' + estilo + '"' : '') +
+    ' title="' + p.titulo + ' · ' + p.rango + '" aria-label="Cambio ' + p.n + ': ' + p.titulo + ', ' + p.rango + '"' +
+    (p.elegido ? ' aria-current="step"' : '') + '>' + p.n + '</button>';
+
+  function activar() {
+    raiz.querySelectorAll('button').forEach((b) => {
+      b.onclick = () => setTriggerValue('elegido', Number(b.dataset.n));
+    });
+  }
+
   function dibujar() {
     const ancho = raiz.clientWidth || 600;
+    if (ancho < ANGOSTO) {  // pantalla angosta: fila de botones numerados
+      raiz.innerHTML = '<div class="botones">' + data.puntos.map((p) => boton(p)).join('') + '</div>';
+      activar();
+      return;
+    }
     // Filas: cada punto va en la primera fila donde queda a SEPARACION px del anterior
     const ultimo = [], filas = data.puntos.map((p) => {
       const x = p.x / 100 * ancho;
@@ -432,11 +617,7 @@ export default function (component) {
     });
     const nFilas = Math.max(1, ...filas.map((f) => f + 1));
     const alto = ARRIBA + nFilas * FILA + EJE;
-    const sel = data.puntos.find((p) => p.elegido);
-    let h = '<p class="elegido" aria-live="polite">' + (sel
-      ? '<span class="num">' + sel.n + '</span><b>' + sel.titulo + '</b> <span class="fecha">· ' + sel.rango + '</span>'
-      : '') + '</p>';
-    h += '<div class="lienzo" style="height:' + alto + 'px">';
+    let h = '<div class="lienzo" style="height:' + alto + 'px">';
     if (data.hueco) {
       h += '<div class="hueco" style="left:' + data.hueco.x0 + '%;width:' + (data.hueco.x1 - data.hueco.x0) +
            '%;background:' + data.hueco.fondo + ';color:' + data.hueco.color + '"><span>' + data.hueco.texto + '</span></div>';
@@ -448,15 +629,11 @@ export default function (component) {
       '<span style="left:' + m.x + '%">' + m.texto + '</span>').join('') + '</div>';
     data.puntos.forEach((p, i) => {
       const y = alto - EJE - FILA / 2 - filas[i] * FILA;
-      h += '<button type="button" data-n="' + p.n + '" style="left:' + p.x + '%;top:' + y + 'px" title="' +
-           p.titulo + ' · ' + p.rango + '" aria-label="Cambio ' + p.n + ': ' + p.titulo + ', ' + p.rango + '"' +
-           (p.elegido ? ' aria-current="step"' : '') + '>' + p.n + '</button>';
+      h += boton(p, 'left:' + p.x + '%;top:' + y + 'px');
     });
     h += '</div>';
     raiz.innerHTML = h;
-    raiz.querySelectorAll('button').forEach((b) => {
-      b.onclick = () => setTriggerValue('elegido', Number(b.dataset.n));
-    });
+    activar();
   }
 
   dibujar();
@@ -503,7 +680,7 @@ def mover_paso(delta: int, total: int) -> None:
 def historia(d: dict, c: dict) -> None:
     hitos = d["hitos"]
     seccion("Los cambios", titular_cambios(hitos),
-            "Toque un punto de la línea de tiempo o use los botones para recorrerlos uno por uno." if len(hitos) else None)
+            "Toque un número o use los botones Anterior y Siguiente." if len(hitos) else None)
     if hitos.empty:
         return
     total = len(hitos)
@@ -514,11 +691,6 @@ def historia(d: dict, c: dict) -> None:
     if elegido is not None and int(elegido) - 1 != paso:
         st.session_state.paso = min(max(int(elegido) - 1, 0), total - 1)
         st.rerun()
-    hueco = tramos_sin_evidencia(d["dias"]).iloc[0]
-    vista = cambios_de_vista(d["vistas"])
-    st.caption(f"Línea de tiempo: {plural(total, 'cambio')} entre el {fecha(hitos['fecha_inicio'].min())} y el "
-               f"{fecha(hitos['fecha_fin'].max())}. Zona sombreada: {rango(hueco['inicio'], hueco['fin'])}, sin fotos "
-               "de la obra." + (f" Línea punteada: el {fecha(vista.iloc[0])} cambió la vista de la cámara." if len(vista) else ""))
 
     with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
         st.button("← Anterior", on_click=mover_paso, args=(-1, total), disabled=paso == 0, key="anterior")
@@ -526,7 +698,6 @@ def historia(d: dict, c: dict) -> None:
         st.button("Siguiente →", on_click=mover_paso, args=(1, total), disabled=paso == total - 1, key="siguiente")
 
     h = hitos.iloc[paso]
-    st.html(f'<p class="kicker" style="margin-top:1rem">{rango(h["fecha_inicio"], h["fecha_fin"])}</p>')
     st.subheader(h["titulo"], anchor=False)
     st.markdown(primera_frase(h["descripcion"]))
     for col, (cuando, foto, momento) in zip(
@@ -541,6 +712,306 @@ def historia(d: dict, c: dict) -> None:
     claridad = CLARIDAD.get(str(h["confianza"]).strip().lower())
     if claridad:
         st.html(f'<p class="claridad">Qué tan claro se ve en las fotos: <b>{claridad}</b></p>')
+
+    hueco = tramos_sin_evidencia(d["dias"]).iloc[0]
+    vista = cambios_de_vista(d["vistas"])
+    with st.expander("Descripción de la gráfica"):
+        st.markdown(
+            f"Línea de tiempo con {plural(total, 'cambio')} entre el {fecha_larga(hitos['fecha_inicio'].min())} y el "
+            f"{fecha_larga(hitos['fecha_fin'].max())}; cada punto numerado es un cambio, ubicado en la fecha en que ya se "
+            f"ve. La zona sombreada, {rango_largo(hueco['inicio'], hueco['fin'])}, son días sin "
+            "fotos de la obra."
+            + (f" La línea punteada marca el {fecha_larga(vista.iloc[0])}, cuando cambió la vista de la cámara."
+               if len(vista) else ""))
+
+
+# ============================================================================
+# Calendario de días (componente propio): "Lo que no se ve" y "Explore por su cuenta"
+# ============================================================================
+
+# Una cuadrícula por mes con los días de la semana. Cada día se distingue por color y por
+# forma: relleno azul (con foto útil), rayado (con foto, sin vista de la obra) y contorno
+# punteado (sin foto). Dos modos:
+#   ver     solo lectura, celdas pequeñas; todos los meses a la vista.
+#   elegir  los días con foto útil son botones de 44 px; se eligen dos fechas para comparar.
+#           Los meses van en una fila con desplazamiento horizontal. Teclado: Tab entra al
+#           calendario, las flechas recorren los días elegibles, Inicio/Fin van al primero y
+#           al último, Enter o Espacio eligen.
+CALENDARIO_CSS = """
+.cal { position: relative; font-family: var(--st-font, sans-serif); color: var(--tinta); }
+.cal td, .cal .dia, .cal .meses { position: relative; }
+.cal .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.cal button { font: inherit; color: inherit; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+
+/* Estados: color + forma (también en la leyenda) */
+.cal .c { position: relative; display: flex; align-items: center; justify-content: center; box-sizing: border-box;
+  width: 100%; height: 100%; border-radius: 5px; border: 1.5px solid transparent; font-variant-numeric: tabular-nums; }
+.cal .c.util { background: var(--si); color: var(--si-texto); }
+.cal .c.nose { border-color: var(--no); color: var(--tinta);
+  background: repeating-linear-gradient(135deg, var(--no-suave) 0 2.5px, transparent 2.5px 6px); }
+.cal .c.sin { border: 1.5px dashed var(--no); color: var(--tinta); }
+.cal .c.fuera { color: var(--tenue); opacity: 0.5; }
+.cal .c.sel { background: var(--tinta); color: var(--fondo); }
+
+.cal .leyenda { list-style: none; display: flex; flex-wrap: wrap; gap: 0.4rem 1.25rem; padding: 0; margin: 0 0 0.9rem;
+  font-size: 0.9rem; color: var(--tenue); }
+.cal .leyenda li { display: flex; align-items: center; gap: 0.45rem; }
+.cal .leyenda b { color: var(--tinta); font-variant-numeric: tabular-nums; }
+.cal .leyenda .c { width: 1.15rem; height: 1.15rem; border-radius: 4px; }
+
+.cal table { border-collapse: collapse; border-spacing: 0; table-layout: fixed; width: calc(7 * var(--celda)); }
+.cal caption { text-align: left; font-weight: 700; font-size: 0.95rem; padding: 0 0 0.3rem; }
+.cal th { font-size: 0.7rem; font-weight: 600; color: var(--tenue); height: 1.4rem; padding: 0; }
+.cal td { width: var(--celda); height: var(--celda); padding: var(--hueco); box-sizing: border-box; }
+
+/* ver: todos los meses en una cuadrícula que se acomoda al ancho */
+.cal.ver { --celda: 28px; --hueco: 1.5px; }
+.cal.ver .c { font-size: 0.7rem; }
+.cal.ver .meses { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(7 * var(--celda)), 1fr));
+  gap: 1.25rem 1.5rem; }
+@media (max-width: 640px) {
+  .cal.ver { --celda: 21px; --hueco: 1px; }
+  .cal.ver .c { font-size: 0.6rem; border-radius: 3px; }
+  .cal.ver .meses { gap: 1rem; }
+}
+
+/* elegir: botones de 44 px, meses en fila con desplazamiento horizontal */
+.cal.elegir { --celda: 44px; --hueco: 3px; }
+.cal.elegir td { padding: 0; }
+.cal.elegir .dia { display: block; width: var(--celda); height: var(--celda); padding: var(--hueco); margin: 0;
+  border: 0; background: none; box-sizing: border-box; }
+.cal.elegir button.dia { cursor: pointer; border-radius: 8px; }
+.cal.elegir button.dia:hover .c { box-shadow: 0 0 0 2px var(--tinta); }
+.cal.elegir button.dia:focus-visible { outline: 3px solid var(--tinta); outline-offset: -1px; }
+.cal.elegir .c { font-size: 0.85rem; }
+.cal.elegir .c.util, .cal.elegir .c.sel { font-weight: 700; }
+.cal .marca { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
+  border-radius: 9px; box-sizing: border-box; border: 1.5px solid var(--tinta); background: var(--fondo);
+  color: var(--tinta); font-size: 0.7rem; font-weight: 700; line-height: 1; }
+.cal .c .marca { position: absolute; top: -6px; right: -6px; }
+.cal.elegir .meses { display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
+  padding: 2px 2px 10px; scrollbar-width: thin; }
+.cal.elegir .mes { flex: 0 0 auto; scroll-snap-align: start; }
+
+/* Controles (mismo estilo que los botones del resto de la página) */
+.cal .controles { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.6rem; }
+.cal .boton { min-height: 44px; display: inline-flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0.9rem;
+  border: 1px solid var(--borde); border-radius: var(--radio); background: transparent; cursor: pointer; text-align: left; }
+.cal .boton:hover { border-color: var(--tinta); }
+.cal .boton:focus-visible { outline: 3px solid var(--tinta); outline-offset: 2px; }
+.cal .boton:disabled { opacity: 0.4; cursor: default; border-color: var(--borde); }
+.cal .ranura { padding-left: 0.6rem; }
+.cal .ranura .rot { display: block; font-size: 0.78rem; color: var(--tenue); line-height: 1.2; }
+.cal .ranura b { display: block; line-height: 1.25; }
+.cal .ranura[aria-pressed="true"] { border-color: var(--tinta); box-shadow: inset 0 0 0 1px var(--tinta); }
+.cal .nav { margin-left: auto; display: flex; gap: 0.5rem; }
+.cal .nav .boton { width: 44px; justify-content: center; padding: 0; font-size: 1.2rem; }
+.cal .aviso { margin: 0 0 0.6rem; font-size: 0.95rem; min-height: 1.4em; }
+@media (max-width: 640px) { .cal .nav { margin-left: 0; } }
+"""
+
+CALENDARIO_JS = """
+const memoria = new Map();  // estado de cada calendario entre redibujos: ranura activa, foco, desplazamiento
+
+export default function (component) {
+  const { data, setTriggerValue, parentElement } = component;
+  const m = memoria.get(data.id) || {};
+  memoria.set(data.id, m);
+  // Si el foco estaba dentro del calendario anterior, se recuerda para devolverlo
+  const activoAntes = parentElement.getRootNode().activeElement;
+  if (activoAntes && parentElement.contains(activoAntes)) m.enfocar = selector(activoAntes);
+  const viejo = parentElement.querySelector('.cal');
+  if (viejo) m.scroll = viejo.querySelector('.meses').scrollLeft;
+  parentElement.querySelectorAll('.cal').forEach((e) => e.remove());
+
+  const elegir = data.modo === 'elegir';
+  const raiz = document.createElement('div');
+  raiz.className = 'cal ' + data.modo;
+  Object.entries(data.colores).forEach(([k, v]) => raiz.style.setProperty('--' + k, v));
+  parentElement.appendChild(raiz);
+
+  const SEMANA = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+  const TEXTO = { util: 'hay foto útil', nose: 'hay foto pero no se ve la obra', sin: 'no hay foto', fuera: 'fuera del periodo' };
+  const NOMBRE = { primera: 'primera', segunda: 'segunda' };
+  const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const dia = {};
+  const elegibles = [];
+  data.meses.forEach((mes) => mes.dias.forEach((d) => { dia[d.f] = d; if (d.e === 'util') elegibles.push(d.f); }));
+  let primera = data.primera, segunda = data.segunda;
+  let activo = m.activo || 'primera';
+  let foco = m.foco && dia[m.foco] && dia[m.foco].e === 'util' ? m.foco : (activo === 'primera' ? primera : segunda) || elegibles[0];
+  let aviso = '', avisoSr = '';  // avisoSr: solo para lector de pantalla (las fechas ya se ven arriba)
+
+  function selector(el) {
+    if (el.dataset && el.dataset.f) return '[data-f="' + el.dataset.f + '"]';
+    if (el.dataset && el.dataset.ranura) return '[data-ranura="' + el.dataset.ranura + '"]';
+    if (el.dataset && el.dataset.nav) return '[data-nav="' + el.dataset.nav + '"]';
+    return null;
+  }
+
+  function celda(d) {
+    const estado = d.e || 'fuera';
+    if (elegir && d.e === 'util') {
+      const n = d.f === primera ? 1 : d.f === segunda ? 2 : 0;
+      const etiqueta = d.t + ', ' + TEXTO.util + (n === 1 ? ', primera fecha' : n === 2 ? ', segunda fecha' : '');
+      return '<td><button type="button" class="dia" data-f="' + d.f + '" tabindex="' + (d.f === foco ? 0 : -1) +
+        '" aria-pressed="' + (n ? 'true' : 'false') + '" aria-label="' + esc(etiqueta) + '"><span class="c ' +
+        (n ? 'sel' : 'util') + '" aria-hidden="true">' + d.d + (n ? '<span class="marca">' + n + '</span>' : '') +
+        '</span></button></td>';
+    }
+    const extra = elegir && d.e ? '; no se puede elegir' : '';
+    return '<td><span class="dia"><span class="c ' + estado + '" aria-hidden="true">' + d.d + '</span>' +
+      '<span class="sr">' + esc(d.t + ', ' + TEXTO[estado] + extra) + '</span></span></td>';
+  }
+
+  function mesHtml(mes) {
+    const celdas = [];
+    for (let i = 0; i < mes.salto; i++) celdas.push('<td></td>');
+    mes.dias.forEach((d) => celdas.push(celda(d)));
+    while (celdas.length % 7) celdas.push('<td></td>');
+    let filas = '';
+    for (let i = 0; i < celdas.length; i += 7) filas += '<tr>' + celdas.slice(i, i + 7).join('') + '</tr>';
+    return '<div class="mes"><table><caption>' + esc(mes.nombre) + '</caption><thead><tr>' +
+      SEMANA.map((s) => '<th scope="col"><span aria-hidden="true">' + s[0].toUpperCase() + '</span><span class="sr">' +
+        s + '</span></th>').join('') + '</tr></thead><tbody>' + filas + '</tbody></table></div>';
+  }
+
+  function ranura(nombre, n, f) {
+    return '<button type="button" class="boton ranura" data-ranura="' + nombre + '" aria-pressed="' +
+      (activo === nombre) + '" aria-label="' + esc((n === 1 ? 'Primera' : 'Segunda') + ' fecha: ' + dia[f].t +
+      '. Pulse para cambiarla') + '"><span class="marca" aria-hidden="true">' + n + '</span><span aria-hidden="true">' +
+      '<span class="rot">' + (n === 1 ? 'Primera' : 'Segunda') + ' fecha</span><b>' + esc(dia[f].c) + '</b></span></button>';
+  }
+
+  function dibujar(enfocar) {
+    const scroll = raiz.querySelector('.meses') ? raiz.querySelector('.meses').scrollLeft : m.scroll;
+    let h = '';
+    if (elegir) {
+      h += '<div class="controles"><div role="group" aria-label="Fechas a comparar" class="controles" style="margin:0">' +
+        ranura('primera', 1, primera) + ranura('segunda', 2, segunda) + '</div>' +
+        '<div class="nav"><button type="button" class="boton" data-nav="-1" aria-label="Ver meses anteriores">&#8249;</button>' +
+        '<button type="button" class="boton" data-nav="1" aria-label="Ver meses siguientes">&#8250;</button></div></div>';
+      h += '<p class="aviso" aria-live="polite">' + (avisoSr ? '<span class="sr">' + esc(avisoSr) + '</span>' : '') +
+        esc(aviso || ('Toque un día con foto útil para elegir la ' + NOMBRE[activo] + ' fecha.')) + '</p>';
+    }
+    h += '<ul class="leyenda" aria-label="Leyenda del calendario">' + data.leyenda.map((l) =>
+      '<li><span class="c ' + l.e + '" aria-hidden="true"></span>' + esc(l.texto) +
+      (l.n !== null && l.n !== undefined ? ' <b>' + l.n + '</b>' : '') + '</li>').join('') + '</ul>';
+    h += '<div class="meses">' + data.meses.map(mesHtml).join('') + '</div>';
+    raiz.innerHTML = h;
+    if (!elegir) return;
+
+    const meses = raiz.querySelector('.meses');
+    if (scroll !== undefined) meses.scrollLeft = scroll;
+    else {  // primera vez: que se vea el mes de la segunda fecha
+      const mes = raiz.querySelector('[data-f="' + segunda + '"]').closest('.mes');
+      meses.scrollLeft = Math.max(0, mes.offsetLeft + mes.offsetWidth - meses.clientWidth + 2);
+    }
+    raiz.querySelectorAll('button.dia').forEach((b) => {
+      b.addEventListener('click', () => elegirDia(b.dataset.f));
+      b.addEventListener('keydown', (ev) => mover(ev, b.dataset.f));
+      b.addEventListener('focus', () => { foco = m.foco = b.dataset.f; });
+    });
+    raiz.querySelectorAll('[data-ranura]').forEach((b) => b.addEventListener('click', () => {
+      activo = m.activo = b.dataset.ranura;
+      aviso = ''; avisoSr = '';
+      foco = m.foco = activo === 'primera' ? primera : segunda;
+      dibujar('[data-ranura="' + activo + '"]');
+    }));
+    const navs = raiz.querySelectorAll('[data-nav]');
+    const paso = 7 * 44 + 16;
+    navs.forEach((b) => b.addEventListener('click', () => {
+      meses.scrollBy({ left: Number(b.dataset.nav) * paso, behavior: 'smooth' });
+    }));
+    const bordes = () => {
+      navs[0].disabled = meses.scrollLeft <= 1;
+      navs[1].disabled = meses.scrollLeft + meses.clientWidth >= meses.scrollWidth - 1;
+      m.scroll = meses.scrollLeft;
+    };
+    meses.addEventListener('scroll', bordes, { passive: true });
+    bordes();
+    if (enfocar) {
+      const el = raiz.querySelector(enfocar);
+      if (el && !el.disabled) el.focus({ preventScroll: true });
+      else if (el) raiz.querySelector('[data-f="' + foco + '"]')?.focus({ preventScroll: true });
+    }
+  }
+
+  function elegirDia(f) {
+    const otra = activo === 'primera' ? segunda : primera;
+    if (f === otra) {
+      avisoSr = '';
+      aviso = 'Ese día ya es la ' + (activo === 'primera' ? 'segunda' : 'primera') + ' fecha; elija otro.';
+      dibujar('[data-f="' + f + '"]');
+      return;
+    }
+    let p = activo === 'primera' ? f : primera, s = activo === 'segunda' ? f : segunda;
+    if (p > s) [p, s] = [s, p];  // la primera fecha es siempre la más antigua (va a la izquierda)
+    primera = p; segunda = s;
+    const siguiente = activo === 'primera' ? 'segunda' : 'primera';
+    avisoSr = 'Primera fecha: ' + dia[primera].t + '. Segunda fecha: ' + dia[segunda].t + '. ';
+    aviso = 'Toque otro día para cambiar la ' + NOMBRE[siguiente] + ' fecha.';
+    activo = m.activo = siguiente;
+    foco = m.foco = f;
+    dibujar('[data-f="' + f + '"]');
+    m.aviso = [aviso, avisoSr];
+    setTriggerValue('fechas', { primera: primera, segunda: segunda });
+  }
+
+  function sumar(f, n) {
+    const t = new Date(f + 'T12:00:00Z');
+    t.setUTCDate(t.getUTCDate() + n);
+    return t.toISOString().slice(0, 10);
+  }
+
+  function mover(ev, f) {
+    const i = elegibles.indexOf(f);
+    let destino = null;
+    if (ev.key === 'ArrowRight') destino = elegibles[i + 1];
+    else if (ev.key === 'ArrowLeft') destino = elegibles[i - 1];
+    else if (ev.key === 'ArrowDown') { const t = sumar(f, 7); destino = elegibles.find((x) => x >= t); }
+    else if (ev.key === 'ArrowUp') { const t = sumar(f, -7); destino = [...elegibles].reverse().find((x) => x <= t); }
+    else if (ev.key === 'Home') destino = elegibles[0];
+    else if (ev.key === 'End') destino = elegibles[elegibles.length - 1];
+    else return;
+    ev.preventDefault();
+    if (!destino) return;
+    raiz.querySelectorAll('button.dia').forEach((b) => { b.tabIndex = b.dataset.f === destino ? 0 : -1; });
+    const b = raiz.querySelector('[data-f="' + destino + '"]');
+    b.focus({ preventScroll: true });
+    b.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  if (m.aviso && elegir) { [aviso, avisoSr] = m.aviso; m.aviso = null; }
+  dibujar(m.enfocar);
+  m.enfocar = null;
+  return () => raiz.remove();
+}
+"""
+
+calendario_componente = st.components.v2.component("calendario_dias", css=CALENDARIO_CSS, js=CALENDARIO_JS)
+
+
+def datos_calendario(dias: pd.DataFrame, c: dict, modo: str, primera: str | None = None,
+                     segunda: str | None = None) -> dict:
+    estado = dias.set_index("fecha")["estado"]
+    cuenta = dias["estado"].value_counts()
+    meses = []
+    for periodo in pd.period_range(dias["fecha"].min(), dias["fecha"].max(), freq="M"):
+        inicio = periodo.start_time.normalize()
+        lista = []
+        for k in range(periodo.days_in_month):
+            f = inicio + pd.Timedelta(days=k)
+            lista.append({"d": f.day, "f": f.strftime("%Y-%m-%d"), "e": CLAVE_ESTADO.get(estado.get(f)),
+                          "t": fecha_larga(f, dia_semana=True), "c": fecha(f, dia_semana=True)})
+        meses.append({"nombre": f"{mayuscula(MESES_LARGO[periodo.month - 1])} {periodo.year}",
+                      "salto": inicio.weekday(), "dias": lista})
+    colores = {"si": c["si"], "si-texto": c["si_texto"], "no": c["no"], "no-suave": c["no_suave"], "tinta": c["tinta"],
+               "tenue": c["tenue"], "fondo": c["fondo"], "borde": c["borde"], "radio": "0.6rem"}
+    leyenda = [{"e": CLAVE_ESTADO[e], "texto": LEYENDA[e], "n": int(cuenta.get(e, 0)) if modo == "ver" else None}
+               for e in ESTADOS]
+    return {"id": modo, "modo": modo, "meses": meses, "leyenda": leyenda, "colores": colores,
+            "primera": primera, "segunda": segunda}
 
 
 # ============================================================================
@@ -557,7 +1028,8 @@ def titular_calendario(dias: pd.DataFrame) -> str:
     return f"En uno de cada {palabra(n)} días no hay evidencia de la obra"
 
 
-def calendario(d: dict, c: dict) -> go.Figure:
+def mapa_por_hora(d: dict, c: dict) -> go.Figure:
+    """Detalle por día y hora de luz (mapa de calor)."""
     horas = d["horas"][d["horas"]["hora"].isin(HORAS_LUZ)]
     codigo = {e: k for k, e in enumerate(ESTADOS)}
     tabla = horas.pivot(index="hora", columns="fecha", values="estado")
@@ -572,85 +1044,56 @@ def calendario(d: dict, c: dict) -> go.Figure:
     fig = go.Figure(go.Heatmap(z=z, x=tabla.columns, y=tabla.index, zmin=-0.5, zmax=len(ESTADOS) - 0.5,
                                colorscale=escala, showscale=False, text=texto, hovertemplate="%{text}<extra></extra>",
                                xgap=0, ygap=1))
-    # Hueco más largo: corchete y rótulo sobre el gráfico
-    hueco = tramos_sin_evidencia(d["dias"]).iloc[0]
-    x0, x1 = hueco["inicio"] - pd.Timedelta(hours=12), hueco["fin"] + pd.Timedelta(hours=12)
     arriba = HORAS_LUZ[0] - 0.5
-    for xa, xb, ya, yb in [(x0, x1, arriba - 0.9, arriba - 0.9), (x0, x0, arriba - 0.9, arriba - 0.3),
-                           (x1, x1, arriba - 0.9, arriba - 0.3)]:
-        fig.add_shape(type="line", x0=xa, x1=xb, y0=ya, y1=yb, line=dict(color=c["no"], width=2))
-    fig.add_annotation(x=x1, y=arriba - 1.0, yanchor="bottom", xanchor="right", showarrow=False, align="right",
-                       text=f"<b>{int(hueco['dias'])} días seguidos sin evidencia</b><br>{rango(hueco['inicio'], hueco['fin'])}",
-                       font=dict(size=12, color=c["no"]))
     for f in cambios_de_vista(d["vistas"]):
         x = f - pd.Timedelta(hours=12)
         fig.add_shape(type="line", x0=x, x1=x, y0=arriba - 1.0, y1=HORAS_LUZ[-1] + 0.5,
                       line=dict(color=c["tinta"], width=1.5, dash="dot"))
         fig.add_annotation(x=x, y=arriba - 1.0, yanchor="bottom", xanchor="left", xshift=5, showarrow=False,
-                           text=f"cambió<br>la vista<br>{fecha(f, anio=False)}", font=dict(size=11, color=c["tinta"]),
-                           align="left")
+                           text=f"cambió la vista, {fecha(f, anio=False)}", font=dict(size=11, color=c["tinta"]))
     marcas = list(range(HORAS_LUZ[0], HORAS_LUZ[-1] + 1, 3)) + [HORAS_LUZ[-1]]
-    fig.update_yaxes(autorange=False, range=[HORAS_LUZ[-1] + 0.5, arriba - 3.2], tickvals=marcas,
+    fig.update_yaxes(autorange=False, range=[HORAS_LUZ[-1] + 0.5, arriba - 2.2], tickvals=marcas,
                      ticktext=[f"{h} h" for h in marcas], title=None, showgrid=False, zeroline=False, fixedrange=True)
     eje_meses(fig, tabla.columns.min(), tabla.columns.max())
-    fig.update_layout(height=400, margin=dict(l=40, r=8, t=8, b=8), plot_bgcolor="rgba(0,0,0,0)",
+    fig.update_layout(height=360, margin=dict(l=40, r=8, t=8, b=8), plot_bgcolor="rgba(0,0,0,0)",
                       paper_bgcolor="rgba(0,0,0,0)", hoverlabel=dict(align="left"), separators=", ")
     return fig
-
-
-def resumen_por_mes(dias: pd.DataFrame) -> list[str]:
-    lineas = []
-    for (anio, mes), g in dias.groupby([dias["fecha"].dt.year, dias["fecha"].dt.month]):
-        sin_foto = int(g["estado"].eq(SIN_FOTO).sum())
-        no_se_ve = int(g["estado"].eq(NO_SE_VE).sum())
-        faltan = sin_foto + no_se_ve
-        nombre = f"**{MESES_LARGO[mes - 1]} {anio}**"
-        if faltan == 0:
-            lineas.append(f"{nombre}: todos los días ({len(g)}) con fotos útiles de la obra.")
-            continue
-        detalle = []
-        if sin_foto:
-            detalle.append(f"en {sin_foto} no hay fotos")
-        if no_se_ve:
-            detalle.append(f"en {no_se_ve} hay fotos pero no se ve la obra")
-        lineas.append(f"{nombre}: de {len(g)} días, {faltan} sin evidencia de la obra ({' y '.join(detalle)}).")
-    return lineas
 
 
 def lo_que_no_se_ve(d: dict, c: dict) -> None:
     dias = d["dias"]
     hueco = tramos_sin_evidencia(dias).iloc[0]
     seccion("Lo que no se ve", titular_calendario(dias),
-            f"Cada columna es un día y cada fila una hora de luz. De noche la cámara también toma fotos, "
-            "pero no sirven para ver la obra.")
-    leyenda = "".join(f'<span style="--c:{c[COLOR_ESTADO[e]]}">{e[:1].upper() + e[1:]}</span>' for e in ESTADOS)
-    st.html(f'<div class="leyenda" role="list" aria-label="Leyenda del calendario">{leyenda}</div>')
-    st.plotly_chart(calendario(d, c), width="stretch", config={"displayModeBar": False, "scrollZoom": False})
+            f"El tramo más largo sin fotos de la obra va {rango_largo(hueco['inicio'], hueco['fin'])}: "
+            f"{int(hueco['dias'])} días seguidos.")
+    calendario_componente(data=datos_calendario(dias, c, "ver"), key="calendario_evidencia")
 
     n = dias["estado"].value_counts()
     vista = cambios_de_vista(d["vistas"])
-    st.caption(
-        f"De {len(dias)} días, {n.get(UTIL, 0)} tienen fotos útiles de la obra; en {n.get(SIN_FOTO, 0)} no hay "
-        f"ninguna foto y en {n.get(NO_SE_VE, 0)} hay fotos pero no se ve la obra. El hueco más largo va del "
-        f"{fecha(hueco['inicio'])} al {fecha(hueco['fin'])}"
-        + (f"; después, el {fecha(vista.iloc[0])}, cambió la vista de la cámara." if len(vista) == 1
-           else f"; la vista de la cámara cambió {len(vista)} veces." if len(vista) else ".")
-    )
-    with st.expander("Mes a mes"):
-        st.markdown("\n".join(f"- {linea}" for linea in resumen_por_mes(dias)))
+    with st.expander("Descripción de la gráfica"):
+        st.markdown(
+            f"Calendario de {len(dias)} días, {rango_largo(dias['fecha'].min(), dias['fecha'].max())}, "
+            f"un cuadro por día. {n.get(UTIL, 0)} días tienen fotos útiles de la obra (cuadro azul relleno); en "
+            f"{n.get(SIN_FOTO, 0)} no hay ninguna foto (contorno punteado) y en {n.get(NO_SE_VE, 0)} hay fotos pero no se "
+            "ve la obra (cuadro rayado)."
+            + (f" El {fecha_larga(vista.iloc[0])} cambió la vista de la cámara." if len(vista) == 1
+               else f" La vista de la cámara cambió {len(vista)} veces." if len(vista) else ""))
+    with st.expander("Detalle por hora"):
+        leyenda = "".join(f'<span style="--c:{c[COLOR_ESTADO[e]]}">{mayuscula(e)}</span>' for e in ESTADOS)
+        st.html(f'<div class="leyenda" role="list" aria-label="Leyenda del detalle por hora">{leyenda}</div>')
+        st.plotly_chart(mapa_por_hora(d, c), width="stretch", config={"displayModeBar": False, "scrollZoom": False})
+        st.caption(f"Cada columna es un día y cada fila una hora de luz, de {HORAS_LUZ[0]} a {HORAS_LUZ[-1]} h. "
+                   "De noche la cámara también toma fotos, pero no sirven para ver la obra.")
     with st.expander("¿Por qué faltan datos?"):
-        no_se_ve = int(n.get(NO_SE_VE, 0))
         st.markdown(
             f"- **No hay foto:** en {plural(int(n.get(SIN_FOTO, 0)), 'día')} la cámara no envió ninguna foto. "
             "Desde aquí no se puede saber por qué (corte de energía, de conexión u otra causa).\n"
-            f"- **Hay foto pero no se ve la obra:** en {plural(no_se_ve, 'día')} la cámara apuntaba a otra cosa "
-            "(el cielo, una superficie lisa o un techo) o las fotos estaban demasiado oscuras.\n"
-            "- **De noche:** la cámara también toma fotos, pero no sirven para ver la obra; por eso el calendario "
-            f"muestra solo de {HORAS_LUZ[0]} a {HORAS_LUZ[-1]} h.\n"
+            f"- **Hay foto pero no se ve la obra:** en {plural(int(n.get(NO_SE_VE, 0)), 'día')} la cámara apuntaba a "
+            "otra cosa (el cielo, una superficie lisa o un techo) o las fotos estaban demasiado oscuras.\n"
             "- **Fotos que no sirven:** algunas salen empañadas, borrosas, quemadas por el sol o con franjas; casi "
             "siempre hay otras útiles el mismo día.\n"
-            + (f"- **La cámara se movió:** el {' y el '.join(fecha(f) for f in vista)} cambió de posición, así que "
-               "comparar fotos de antes y después de esa fecha es menos exacto." if len(vista)
+            + (f"- **La cámara se movió:** el {' y el '.join(fecha_larga(f) for f in vista)} cambió de posición, así "
+               "que las fotos de antes y después de esa fecha no se pueden superponer." if len(vista)
                else "- **La cámara no cambió de posición** en todo el periodo.")
         )
 
@@ -659,50 +1102,62 @@ def lo_que_no_se_ve(d: dict, c: dict) -> None:
 # Explore por su cuenta y pie
 # ============================================================================
 
-def explora(d: dict) -> None:
+def explora(d: dict, c: dict) -> None:
     dias = d["dias"]
     seccion("Explore por su cuenta", "Compare dos días cualquiera",
-            "Elija dos fechas y deslice la barra; también funciona con las flechas del teclado.")
-    utiles = dias[dias["estado"].eq(UTIL)].reset_index(drop=True)
-    opciones = list(utiles.index)
-    etiqueta = {i: fecha(utiles.at[i, "fecha"], dia_semana=True) for i in opciones}
+            "Toque dos días con foto útil en el calendario y deslice la barra sobre la foto.")
+    utiles = dias[dias["estado"].eq(UTIL)].set_index("fecha", drop=False)
+    validas = set(utiles.index.strftime("%Y-%m-%d"))
     # Por defecto, la última vista de la cámara (la portada ya muestra la primera)
-    ultima = utiles.index[utiles["vista"].eq(utiles["vista"].iloc[-1])]
-    c1, c2 = st.columns(2)
-    i = c1.selectbox("Primera fecha", opciones, index=int(ultima[0]), format_func=etiqueta.get, key="comp_antes")
-    j = c2.selectbox("Segunda fecha", opciones, index=int(ultima[-1]), format_func=etiqueta.get, key="comp_despues")
-    if i == j:
-        st.info("Elija dos fechas distintas para compararlas.")
-        return
-    a, b = utiles.loc[min(i, j)], utiles.loc[max(i, j)]
-    mostrar_comparacion(d, a, b)
+    ultima = utiles[utiles["vista"].eq(utiles["vista"].iloc[-1])]
+    por_defecto = (ultima.index[0].strftime("%Y-%m-%d"), ultima.index[-1].strftime("%Y-%m-%d"))
+    actual = st.session_state.get("fechas_explora", por_defecto)
+    if not (set(actual) <= validas and actual[0] < actual[1]):
+        actual = por_defecto
+    st.session_state.fechas_explora = actual
+
+    resultado = calendario_componente(data=datos_calendario(dias, c, "elegir", *actual), key="calendario_explora",
+                                      on_fechas_change=lambda: None)
+    nuevas = getattr(resultado, "fechas", None)
+    if nuevas:
+        par = tuple(sorted((str(nuevas.get("primera")), str(nuevas.get("segunda")))))
+        if par != actual and set(par) <= validas and par[0] != par[1]:
+            st.session_state.fechas_explora = par
+            st.rerun()
+
+    a, b = utiles.loc[pd.Timestamp(actual[0])], utiles.loc[pd.Timestamp(actual[1])]
+    mostrar_comparacion(d, c, a, b)
     entre = d["hitos"][(d["hitos"]["fecha_fin"] > a["fecha"]) & (d["hitos"]["fecha_inicio"] < b["fecha"])]
     if len(entre):
-        st.markdown(f"Entre estas fechas: " + "; ".join(f"{h.numero}. {h.titulo.lower()}" for h in entre.itertuples()) + ".")
+        st.markdown("Cambios entre estas fechas: " + "; ".join(f"{h.numero}. {h.titulo.lower()}" for h in entre.itertuples()) + ".")
 
 
 def pie() -> None:
-    st.html('<div class="seccion"></div>')
+    st.html('<div class="seccion" aria-hidden="true"></div>')
     with st.expander("Cómo se hizo"):
         st.markdown(
-            "Se revisaron todas las fotos de la cámara y se descartaron las de noche, las demasiado oscuras, borrosas "
-            "o dañadas y las de los días en que la cámara no apuntaba a la obra. De cada día con fotos útiles se eligió "
-            "una cercana al mediodía. Los cambios se identificaron a mano, comparando una foto por semana y, para "
-            "precisar la fecha, una foto por día. Cuando la cámara se corrió ligeramente, el comparador alinea las "
-            "fotos para que coincidan."
+            "Las fotos son de la cámara instalada en la obra por la Contraloría General de la República (CGR), proyecto "
+            "dIAra, y son de uso público. Se revisaron todas y se descartaron las de noche, las demasiado oscuras, "
+            "borrosas o dañadas y las de los días en que la cámara no apuntaba a la obra. De cada día con fotos útiles se "
+            "eligió una cercana al mediodía. Los cambios se identificaron a mano, comparando una foto por semana y, para "
+            "precisar la fecha, una foto por día. Cuando la cámara se corrió ligeramente, el comparador alinea las fotos "
+            "para que coincidan."
         )
-    st.caption(f"Fuente: fotografías de la Contraloría General de la República (CGR), proyecto dIAra, de uso público. "
-               f"[Código y datos]({REPO_URL}). Proyecto Integrador III · Visualización de datos, Lead University, 2026.")
+    st.html('<p class="alcance">Este sitio muestra únicamente lo que se observa en las fotos de la cámara; no informa '
+            'presupuesto, plazos ni porcentaje de avance de la obra.</p>')
+    st.caption(f"Proyecto Integrador III · Visualización de datos, Lead University, 2026 · [Código y datos]({REPO_URL})")
 
 
 def main() -> None:
     d = cargar()
     c = COLORES[tema()]
     estilos(c)
-    portada(d)
+    franja(d["dias"])
+    portada(d, c)
+    cada_mes(d)
     historia(d, c)
     lo_que_no_se_ve(d, c)
-    explora(d)
+    explora(d, c)
     pie()
 
 

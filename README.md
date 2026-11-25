@@ -1,6 +1,6 @@
 # Proyecto Integrador III · Visualización de datos
 
-Visualización del avance del Puente María Aguilar (PROERI) a partir de las fotografías capturadas por el sistema dIAra de la Contraloría General de la República (CGR). El proyecto responde una pregunta ciudadana: **¿qué cambios se observan en la obra, cuándo ocurrieron y qué días no hay evidencia fotográfica?**
+Visualización de los cambios visibles en la obra del puente sobre el río María Aguilar (PROERI) a partir de las fotografías capturadas por el sistema dIAra de la Contraloría General de la República (CGR). El proyecto responde una pregunta ciudadana: **¿qué cambios se observan en la obra, cuándo ocurrieron y qué días no hay evidencia fotográfica?**
 
 Curso: Visualización de datos (BCD 8215), Lead University · III cuatrimestre 2026.
 
@@ -25,7 +25,7 @@ data/
 reports/
   revision_tramos/ # hojas de contacto para revisión visual
   hitos/           # hojas semanales y diarias para identificar hitos de la obra
-  app_v1/, app_v2/ # capturas de la app antes y después del rediseño
+  app_v1/, app_v2/, app_v3/ # capturas de la app en cada ronda de rediseño
 src/               # scripts de procesamiento, en orden numérico
 ```
 
@@ -56,7 +56,7 @@ Los hitos (cambios visibles en la obra) **se identifican a mano**; `05_hojas_sem
 - **Foto semanal.** Por cada semana (lunes a domingo) y `encuadre_id`, entre los días con `estado_dia_final == CON_EVIDENCIA` se elige la `foto_del_dia` con mayor `nitidez`. Una semana repartida entre dos encuadres (2026-01-12 a 2026-01-18) aparece en la hoja de cada uno; una semana sin días con evidencia queda como celda «sin evidencia». Las semanas del periodo sin vista de la obra (2026-02-09 a 2026-03-01) no tienen encuadre y no aparecen. La selección queda en `data/processed_data/fotos_semanales.csv` (`semana_inicio`, `encuadre_id`, `ruta`, `fecha_hora`, `nitidez`).
 - **Hojas.** `reports/hitos/semanas_encuadre_<id>.jpg` (miniaturas de 640 px en orden cronológico, con fecha y hora encima; se dividen en `_parte1`, `_parte2`... si no caben). Siguen la regla para mostrar de abajo.
 - **Modo diario.** Para acotar la fecha de un cambio que se ve entre dos semanas: `python src/05_hojas_semanales.py --dias 2025-10-06 2025-10-12` genera `reports/hitos/dias_<inicio>_<fin>.jpg` con la foto del día de cada día del rango (celda «sin evidencia» con el estado del día donde no hay).
-- **Anotación.** Los hitos se anotan en `data/processed_data/hitos.csv` (`fecha_inicio`, `fecha_fin`, `encuadre_id`, `titulo`, `descripcion`, `ruta_foto_antes`, `ruta_foto_despues`, `confianza` alta/media/baja, `identificado_por`). El script la crea solo si no existe, con el hito ya identificado (colocación de la losa del puente, 2025-10-08 a 2025-10-09); si existe, no la toca.
+- **Anotación.** Los hitos se anotan en `data/processed_data/hitos.csv` (`fecha_inicio`, `fecha_fin`, `encuadre_id`, `titulo`, `descripcion`, `ruta_foto_antes`, `ruta_foto_despues`, `confianza` alta/media/baja, `identificado_por` y, opcional, `resumen`: frase breve en presente impersonal, como «se pintan las líneas», que la app usa en «Qué pasó cada mes»; si falta, usa el título). El script la crea solo si no existe, con el hito ya identificado (colocación de la losa del puente, 2025-10-08 a 2025-10-09); si existe, no la toca.
 
 ### Regla para mostrar las fotos
 
@@ -81,7 +81,7 @@ Ignorar la etiqueta y girar siempre 180° da el mismo resultado en todas las fot
 
 ## App web
 
-`app/streamlit_app.py` es la app del proyecto, para la ciudadanía, con estructura de pieza de periodismo de datos: portada con el hallazgo, un comparador antes/después y tres cifras; recorrido paso a paso por los cambios con una línea de tiempo; lo que no se ve (calendario de evidencia por día y hora de luz, con resumen por mes y por qué faltan datos) y «Explore por su cuenta», un comparador libre entre dos fechas. El tema (tipografía, fondos claro y oscuro) está en `.streamlit/config.toml`; en toda la página el azul significa que hay evidencia de la obra y el bermellón que no la hay.
+`app/streamlit_app.py` es la app del proyecto, para la ciudadanía: «Puente sobre el río María Aguilar: lo que muestran las fotos». De arriba abajo: franja con el nombre del puente, la fuente y la fecha de la última foto; portada («Seis meses de obra vistos por una cámara») con el estado de la obra según las fotos, un comparador antes/después y tres cifras (semanas hasta los primeros vehículos, cambios visibles y días seguidos sin fotos); «Qué pasó cada mes»; recorrido por los cambios con una línea de tiempo (botones numerados en pantallas angostas); lo que no se ve (calendario de días con y sin evidencia, con detalle por hora y por qué faltan datos); «Explore por su cuenta», un comparador libre entre dos días elegidos en el calendario, y una línea final sobre el alcance: el sitio muestra solo lo que se ve en las fotos, no presupuesto, plazos ni porcentaje de avance. Todo se calcula de `app/datos`, sin depender de un número fijo de hitos. El tema (tipografía, fondos claro y oscuro) está en `.streamlit/config.toml`; en toda la página el azul significa que hay evidencia de la obra y el bermellón que no la hay.
 
 La app **solo lee archivos de `app/`**, así que funciona sin `data/raw_data`. Esos archivos los genera `06_fotos_app.py`:
 
