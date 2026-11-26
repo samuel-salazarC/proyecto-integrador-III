@@ -1,27 +1,28 @@
 """Fotos reducidas y tablas livianas para la app web (app/streamlit_app.py).
 
-Requiere haber ejecutado 04_fotos_utilizables.py y 05_hojas_semanales.py (y anotado
-data/processed_data/hitos.csv). La app solo lee app/, así que funciona desplegada sin
-data/raw_data. Genera:
+Requiere haber ejecutado 04_fotos_utilizables.py (y anotado data/processed_data/hitos.csv).
+La app solo lee app/, así que funciona desplegada sin data/raw_data. Genera:
 
-  app/fotos/<AAAAMMDD-HHMMSS>.jpg       foto reducida (máx. ANCHO_MAX px, JPEG CALIDAD_JPG,
+  app/static/fotos/<AAAAMMDD-HHMMSS>.jpg  foto reducida (máx. ANCHO_MAX px, JPEG CALIDAD_JPG,
                                         sin EXIF) de la foto_del_dia de cada día con
-                                        evidencia y de las fotos de hitos.csv y
-                                        fotos_semanales.csv; las que ya no se usan se borran
-  app/fotos/indice.csv                  fecha, encuadre_id, vista, archivo, fecha_hora
-  app/fotos/miniaturas/<archivo>.jpg    miniatura (ANCHO_MINIATURA px) de las fotos semanales,
-                                        para la tira de la línea de tiempo
-  app/datos/dias.csv                    un día por fila: estado en lenguaje ciudadano,
-                                        vista y foto del día
-  app/datos/evidencia_dia_hora.csv      un día y hora (0-23) por fila: estado y número de fotos
-  app/datos/hitos.csv                   hitos con las fotos apuntando a app/fotos (y la frase
-                                        breve `resumen`, si hitos.csv la trae)
-  app/datos/fotos_semanales.csv         foto más nítida de cada semana y vista
+                                        evidencia y de las fotos de hitos.csv; las que ya
+                                        no se usan se borran. Está en app/static/ porque la
+                                        app la sirve por URL (server.enableStaticServing)
+                                        para el recorrido y el time-lapse.
+  app/static/fotos/indice.csv           fecha, encuadre_id, vista, archivo, fecha_hora
+  app/datos/dias.csv                    un día por fila: estado en lenguaje ciudadano, vista,
+                                        foto del día y fotos excluidas por cada motivo
+  app/datos/fotos.csv                   una fila por foto (las 21 644): fecha, hora y estado
+                                        (útil, excluida por calidad, de noche, sin vista de
+                                        la obra), sin rutas ni columnas técnicas
+  app/datos/hitos.csv                   hitos con las fotos apuntando a app/static/fotos
   app/datos/vistas.csv                  fechas de cada vista de la cámara
-  app/datos/alineacion.csv              corrimiento de la cámara dentro de una misma vista,
-                                        para alinear fotos en el comparador
+  data/processed_data/alineacion_corrimientos.csv
+                                        corrimiento de la cámara en cada SALTO_MENOR (el del
+                                        2026-01-17), que 07 usa al registrar los días; la app
+                                        no lo lee (usa app/datos/alineacion_dia.csv, de 07)
 
-Las rutas de fotos en app/datos son relativas a app/ (fotos/<archivo>.jpg).
+Las rutas de fotos en app/datos son relativas a app/ (static/fotos/<archivo>.jpg).
 
 Vista: lo que el público percibe como la misma vista de la cámara. Agrupa encuadres:
 un tramo que empieza con un corrimiento pequeño (SALTO_MENOR, como el del 2026-01-17,
@@ -30,10 +31,10 @@ un CAMBIO_CONFIRMADO (2026-03-04) empieza una vista nueva. Hoy: encuadres 1 y 2 
 encuadre 3 -> vista 2. encuadre_id no se modifica en data/processed_data; la app usa
 solo vista. Para cada SALTO_MENOR se mide la transformación de similitud (ORB + RANSAC,
 el mismo método de 02) entre las dos fotos de la frontera en cambios_encuadre.csv, sobre
-las fotos tal como se muestran (ANCHO_MAX px), y la app la usa para alinear la segunda
-foto del comparador cuando las fechas quedan a lados distintos del corrimiento.
+las fotos tal como se muestran (ANCHO_MAX px); 07_indice_cambio.py lo usa al registrar
+cada día contra el anterior (la cámara se desplaza además unos píxeles casi a diario).
 
-Estados (los mismos para el día y para cada hora):
+Estados de cada día (dias.csv):
   hay foto útil                   al menos una foto utilizable
   hay foto pero no se ve la obra  hay fotos y ninguna es utilizable (noche, poca luz,
                                   borrosa, la cámara no apunta a la obra...)
@@ -66,8 +67,6 @@ _spec.loader.exec_module(fu)
 
 ANCHO_MAX = 960
 CALIDAD_JPG = 80
-ANCHO_MINIATURA = 400       # se muestran a ~200 px; el doble para pantallas de alta densidad
-CALIDAD_MINIATURA = 70
 MAX_MB_APP = 30
 TIPOS_MISMA_VISTA = {"SALTO_MENOR", "ROTACION_180"}  # inicio de tramo que no cambia la vista
 ORB_PUNTOS = 5000
@@ -80,10 +79,20 @@ NO_SE_VE = "hay foto pero no se ve la obra"
 SIN_FOTO = "no hay foto"
 ESTADO_DIA = {"CON_EVIDENCIA": UTIL, "SIN_VISTA_DE_OBRA": NO_SE_VE, "SIN_FOTOS_UTILES": NO_SE_VE, "SIN_FOTOS": SIN_FOTO}
 
+# Estado de cada foto para la figura de puntos de la app (fotos.csv). Las exclusiones por
+# luz insuficiente, calidad, orientación dudosa o archivo ilegible se agrupan como «excluida
+# por calidad»: todas son fotos tomadas de día con vista de la obra que no se pueden leer bien.
+ESTADO_FOTO = {"NOCTURNA": "de noche", "DIA_SIN_VISTA_DE_OBRA": "sin vista de la obra"}
+FOTO_UTIL, FOTO_CALIDAD = "útil", "excluida por calidad"
+# Columnas de dias.csv con las fotos excluidas de cada día, por motivo_exclusion de 04
+MOTIVOS = {"NOCTURNA": "excluidas_nocturna", "LUZ_INSUFICIENTE": "excluidas_luz_insuficiente",
+           "DIA_SIN_VISTA_DE_OBRA": "excluidas_dia_sin_vista", "CALIDAD": "excluidas_calidad",
+           "ORIENTACION_DUDOSA": "excluidas_orientacion_dudosa", "ILEGIBLE": "excluidas_ilegible"}
+
 
 def archivo_app(ruta) -> str | None:
-    """20251008/20251008-115752.jpg -> fotos/20251008-115752.jpg (relativa a app/)."""
-    return f"fotos/{Path(ruta).name}" if isinstance(ruta, str) and ruta else None
+    """20251008/20251008-115752.jpg -> static/fotos/20251008-115752.jpg (relativa a app/)."""
+    return f"static/fotos/{Path(ruta).name}" if isinstance(ruta, str) and ruta else None
 
 
 def guardar_jpg(imagen: np.ndarray, destino: Path, ancho_max: int, calidad: int) -> bool:
@@ -161,13 +170,21 @@ def alineaciones(raw: Path, tramos: pd.DataFrame, cambios: pd.DataFrame, vista: 
                                         "m00", "m01", "m02", "m10", "m11", "m12"])
 
 
-def evidencia_por_hora(fotos: pd.DataFrame, fechas: pd.Series) -> pd.DataFrame:
-    rejilla = pd.MultiIndex.from_product([fechas, range(24)], names=["fecha", "hora"]).to_frame(index=False)
-    conteo = fotos.groupby(["fecha", "hora"]).agg(fotos=("ruta", "size"), fotos_utiles=("utilizable", "sum")).reset_index()
-    tabla = rejilla.merge(conteo, on=["fecha", "hora"], how="left").fillna({"fotos": 0, "fotos_utiles": 0})
-    tabla[["fotos", "fotos_utiles"]] = tabla[["fotos", "fotos_utiles"]].astype(int)
-    tabla["estado"] = np.select([tabla["fotos_utiles"].gt(0), tabla["fotos"].gt(0)], [UTIL, NO_SE_VE], default=SIN_FOTO)
-    return tabla[["fecha", "hora", "estado", "fotos", "fotos_utiles"]]
+def tabla_fotos(fotos: pd.DataFrame) -> pd.DataFrame:
+    """Una fila por foto: fecha, hora (HH:MM:SS) y estado, sin rutas ni columnas técnicas."""
+    estado = fotos["motivo_exclusion"].map(ESTADO_FOTO).fillna(FOTO_CALIDAD)
+    estado = estado.where(fotos["motivo_exclusion"].notna(), FOTO_UTIL)
+    tabla = pd.DataFrame({"fecha": fotos["fecha"], "hora": fotos["fecha_hora"].str[11:19], "estado": estado})
+    return tabla.sort_values(["fecha", "hora"]).reset_index(drop=True)
+
+
+def exclusiones_por_dia(fotos: pd.DataFrame) -> pd.DataFrame:
+    """Fotos excluidas de cada día por motivo (columnas de MOTIVOS)."""
+    desconocidos = set(fotos["motivo_exclusion"].dropna()) - set(MOTIVOS)
+    if desconocidos:
+        raise ValueError(f"motivo_exclusion desconocido: {sorted(desconocidos)}")
+    tabla = pd.crosstab(fotos["fecha"], fotos["motivo_exclusion"]).reindex(columns=list(MOTIVOS), fill_value=0)
+    return tabla.rename(columns=MOTIVOS)
 
 
 def main() -> None:
@@ -177,41 +194,35 @@ def main() -> None:
     parser.add_argument("--datos", type=Path, default=base / "data" / "processed_data")
     parser.add_argument("--app", type=Path, default=base / "app")
     args = parser.parse_args()
-    dir_fotos, dir_datos = args.app / "fotos", args.app / "datos"
+    dir_fotos, dir_datos = args.app / "static" / "fotos", args.app / "datos"
     dir_fotos.mkdir(parents=True, exist_ok=True)
     dir_datos.mkdir(parents=True, exist_ok=True)
 
     resumen = pd.read_csv(args.datos / "resumen_diario_final.csv")
     fotos = pd.read_csv(args.datos / "fotos_utilizables.csv",
-                        usecols=["ruta", "fecha", "fecha_hora", "hora", "encuadre_id", "utilizable", "rotacion_desde_crudo"])
+                        usecols=["ruta", "fecha", "fecha_hora", "hora", "encuadre_id", "utilizable", "motivo_exclusion",
+                                 "rotacion_desde_crudo"])
     hitos = pd.read_csv(args.datos / "hitos.csv")
-    semanales = pd.read_csv(args.datos / "fotos_semanales.csv")
     tramos = pd.read_csv(args.datos / "tramos_encuadre.csv")
     cambios = pd.read_csv(args.datos / "cambios_encuadre.csv")
     vista = vistas_por_encuadre(tramos)
     print("Vistas: " + ", ".join(f"encuadre {e} -> vista {v}" for e, v in sorted(vista.items())))
 
-    # Una foto por semana y vista: la más nítida entre las de sus encuadres (p. ej. la semana
-    # del 2026-01-12, repartida entre los encuadres 1 y 2, queda con una sola foto)
-    semanales["vista"] = semanales["encuadre_id"].map(vista).astype("Int64")
-    semanales = (semanales.dropna(subset=["ruta"]).sort_values(["nitidez", "fecha_hora"], ascending=[False, True])
-                 .drop_duplicates(["semana_inicio", "vista"]).sort_values(["semana_inicio", "vista"]))
-
     # --- Fotos -------------------------------------------------------------------
     del_dia = resumen.loc[resumen["estado_dia_final"].eq("CON_EVIDENCIA"), "foto_del_dia"].dropna()
-    rutas = pd.concat([del_dia, hitos["ruta_foto_antes"], hitos["ruta_foto_despues"], semanales["ruta"]]).dropna()
+    rutas = pd.concat([del_dia, hitos["ruta_foto_antes"], hitos["ruta_foto_despues"]]).dropna()
     rutas = sorted(set(rutas))
     info = fotos.set_index("ruta")
     faltan = [r for r in rutas if r not in info.index]
     if faltan:
-        print(f"AVISO: {len(faltan)} foto(s) de hitos.csv o fotos_semanales.csv no están en fotos_utilizables.csv: {faltan}")
+        print(f"AVISO: {len(faltan)} foto(s) de hitos.csv no están en fotos_utilizables.csv: {faltan}")
     no_utiles = [r for r in rutas if r in info.index and not info.at[r, "utilizable"]]
     if no_utiles:
         print(f"AVISO: {len(no_utiles)} foto(s) referenciadas no son utilizables (se incluyen igual): {no_utiles}")
 
     indice, nuevas, errores = [], 0, []
     for ruta in rutas:
-        destino = args.app / archivo_app(ruta)
+        destino = dir_fotos / Path(ruta).name
         rotacion = int(info.at[ruta, "rotacion_desde_crudo"]) if ruta in info.index else fu.ROTACION_DESDE_CRUDO
         if not destino.exists():
             if not reducir(args.raw, ruta, rotacion, destino):
@@ -233,20 +244,7 @@ def main() -> None:
     viejas = [p for p in dir_fotos.glob("*.jpg") if p.name not in vigentes]
     for p in viejas:
         p.unlink()
-    print(f"Fotos: {len(indice)} en app/fotos ({nuevas} nuevas, {len(viejas)} borradas por no usarse)")
-
-    # Miniaturas de las fotos semanales (desde la foto reducida, que ya está derecha)
-    dir_minis = dir_fotos / "miniaturas"
-    dir_minis.mkdir(exist_ok=True)
-    minis = {Path(r).name for r in semanales["ruta"].dropna() if (dir_fotos / Path(r).name).exists()}
-    for nombre in minis:
-        if not (dir_minis / nombre).exists():
-            imagen = cv2.imread(str(dir_fotos / nombre), cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION)
-            guardar_jpg(imagen, dir_minis / nombre, ANCHO_MINIATURA, CALIDAD_MINIATURA)
-    for p in dir_minis.glob("*.jpg"):
-        if p.name not in minis:
-            p.unlink()
-    print(f"Miniaturas semanales: {len(minis)}")
+    print(f"Fotos: {len(indice)} en app/static/fotos ({nuevas} nuevas, {len(viejas)} borradas por no usarse)")
 
     # --- Tablas ------------------------------------------------------------------
     dias = resumen[["fecha", "estado_dia_final", "encuadre_id", "fotos_total", "fotos_utiles", "foto_del_dia"]].copy()
@@ -258,16 +256,19 @@ def main() -> None:
     dias["foto"] = dias["foto_del_dia"].map(archivo_app)
     dias["vista"] = dias["encuadre_id"].map(vista).astype("Int64")
     dias = dias.rename(columns={"fotos_total": "fotos"})
-    dias[["fecha", "estado", "vista", "fotos", "fotos_utiles", "foto", "fecha_hora_foto"]].to_csv(
+    excluidas = exclusiones_por_dia(fotos).reindex(dias["fecha"], fill_value=0).reset_index(drop=True)
+    dias = pd.concat([dias.reset_index(drop=True), excluidas], axis=1)
+    dias[["fecha", "estado", "vista", "fotos", "fotos_utiles", "foto", "fecha_hora_foto", *MOTIVOS.values()]].to_csv(
         dir_datos / "dias.csv", index=False)
 
-    por_hora = evidencia_por_hora(fotos, resumen["fecha"])
-    # Coherencia: un día tiene foto útil si y solo si alguna de sus horas la tiene
-    util_dia = por_hora.groupby("fecha")["estado"].apply(lambda s: s.eq(UTIL).any())
-    distintos = (util_dia != dias.set_index("fecha")["estado"].eq(UTIL)).sum()
+    por_foto = tabla_fotos(fotos)
+    # Coherencia: un día tiene foto útil si y solo si alguna de sus fotos lo es
+    util_dia = por_foto.groupby("fecha")["estado"].apply(lambda s: s.eq(FOTO_UTIL).any())
+    util_dia = util_dia.reindex(dias["fecha"], fill_value=False)
+    distintos = int((util_dia.to_numpy() != dias["estado"].eq(UTIL).to_numpy()).sum())
     if distintos:
-        print(f"AVISO: {distintos} día(s) con estado distinto entre dias.csv y evidencia_dia_hora.csv")
-    por_hora.to_csv(dir_datos / "evidencia_dia_hora.csv", index=False)
+        print(f"AVISO: {distintos} día(s) con estado distinto entre dias.csv y fotos.csv")
+    por_foto.to_csv(dir_datos / "fotos.csv", index=False)
 
     salida_hitos = hitos.assign(foto_antes=hitos["ruta_foto_antes"].map(archivo_app),
                                 foto_despues=hitos["ruta_foto_despues"].map(archivo_app))
@@ -275,28 +276,27 @@ def main() -> None:
     salida_hitos["fecha_hora_despues"] = hitos["ruta_foto_despues"].map(info["fecha_hora"])
     salida_hitos["vista"] = hitos["encuadre_id"].map(vista).astype("Int64")
     salida_hitos = salida_hitos.sort_values(["fecha_inicio", "fecha_fin"])
-    # resumen: frase breve opcional («se pintan las líneas») para el resumen mensual de la app
     columnas = ["fecha_inicio", "fecha_fin", "vista", "titulo", "descripcion", "foto_antes", "foto_despues",
-                "fecha_hora_antes", "fecha_hora_despues", "confianza"] + (["resumen"] if "resumen" in hitos else [])
+                "fecha_hora_antes", "fecha_hora_despues", "confianza"]
     salida_hitos[columnas].to_csv(dir_datos / "hitos.csv", index=False)
-
-    semanales.assign(foto=semanales["ruta"].map(archivo_app))[
-        ["semana_inicio", "vista", "foto", "fecha_hora"]].to_csv(dir_datos / "fotos_semanales.csv", index=False)
 
     vistas = tramos.assign(vista=tramos["encuadre_id"].map(vista)).groupby("vista").agg(
         fecha_inicio=("fecha_inicio", "min"), fecha_fin=("fecha_fin", "max"))
     vistas.reset_index().to_csv(dir_datos / "vistas.csv", index=False)
-    (dir_datos / "camaras.csv").unlink(missing_ok=True)  # reemplazada por vistas.csv
-    alineaciones(args.raw, tramos, cambios, vista).to_csv(dir_datos / "alineacion.csv", index=False)
+    # Tablas de versiones anteriores de la app que ya no se usan
+    for vieja in ["camaras.csv", "evidencia_dia_hora.csv", "fotos_semanales.csv", "alineacion.csv"]:
+        (dir_datos / vieja).unlink(missing_ok=True)
+    alineaciones(args.raw, tramos, cambios, vista).to_csv(args.datos / "alineacion_corrimientos.csv", index=False)
 
     # --- Resumen -----------------------------------------------------------------
     print("\nRESUMEN")
     print(dias["estado"].value_counts().to_string())
-    print(f"Hitos: {len(hitos)} | semanas: {len(semanales)} | horas: {len(por_hora):,}")
+    print(por_foto["estado"].value_counts().to_string())
+    print(f"Hitos: {len(hitos)} | fotos: {len(por_foto):,}")
     tamanos = {d: sum(p.stat().st_size for p in (args.app / d).rglob("*") if p.is_file()) / 1e6
-               for d in ["fotos", "datos"]}  # fotos incluye miniaturas
+               for d in ["static", "datos"]}
     total = sum(p.stat().st_size for p in args.app.rglob("*") if p.is_file() and "__pycache__" not in p.parts) / 1e6
-    print(f"Tamaño: fotos {tamanos['fotos']:.1f} MB | datos {tamanos['datos']:.2f} MB | app/ completa {total:.1f} MB")
+    print(f"Tamaño: fotos {tamanos['static']:.1f} MB | datos {tamanos['datos']:.2f} MB | app/ completa {total:.1f} MB")
     if total > MAX_MB_APP:
         print(f"AVISO: app/ supera {MAX_MB_APP} MB; baje ANCHO_MAX o CALIDAD_JPG")
 

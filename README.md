@@ -1,6 +1,8 @@
 # Proyecto Integrador III · Visualización de datos
 
-Visualización de los cambios visibles en la obra del puente sobre el río María Aguilar (PROERI) a partir de las fotografías capturadas por el sistema dIAra de la Contraloría General de la República (CGR). El proyecto responde una pregunta ciudadana: **¿qué cambios se observan en la obra, cuándo ocurrieron y qué días no hay evidencia fotográfica?**
+Visualización de los cambios visibles en la obra del puente sobre el río María Aguilar (PROERI) a partir de las fotografías capturadas por el sistema dIAra de la Contraloría General de la República (CGR). El proyecto responde: **¿qué cambios se observan en la obra, cuándo ocurrieron y qué días no hay evidencia fotográfica?**
+
+**Público.** El público principal es el perfil de auditor o consultor de la CGR, que necesita verificar cada afirmación contra las fotos y los datos; se mantiene una capa ciudadana, sin tecnicismos, en la primera pestaña de la app. No se usan datos externos a las fotografías.
 
 Curso: Visualización de datos (BCD 8215), Lead University · III cuatrimestre 2026.
 
@@ -17,15 +19,16 @@ Curso: Visualización de datos (BCD 8215), Lead University · III cuatrimestre 2
 app/
   streamlit_app.py # app web (solo lee archivos de app/)
   requirements.txt # dependencias mínimas para el despliegue
-  fotos/           # fotos reducidas e índice (generadas por 06)
-  datos/           # tablas livianas para la app (generadas por 06)
+  static/fotos/    # fotos reducidas e índice (generadas por 06; se sirven por URL)
+  datos/           # tablas livianas para la app (generadas por 06 y 07)
 data/
   raw_data/        # fotografías originales (no versionadas)
   processed_data/  # tablas generadas por el procesamiento
 reports/
   revision_tramos/ # hojas de contacto para revisión visual
   hitos/           # hojas semanales y diarias para identificar hitos de la obra
-  app_v1/, app_v2/, app_v3/ # capturas de la app en cada ronda de rediseño
+  indice_cambio/   # hoja de picos, zona analizada y registro diario del índice de cambio (07)
+  app_v1/ … app_v4/ # capturas de la app en cada ronda de rediseño
 src/               # scripts de procesamiento, en orden numérico
 ```
 
@@ -40,6 +43,7 @@ python src/03_orientacion.py       # orientación detectada de cada foto (despu�
 python src/04_fotos_utilizables.py # tabla final de fotos utilizables y resumen diario final
 python src/05_hojas_semanales.py   # hojas semanales por encuadre para identificar hitos
 python src/06_fotos_app.py         # fotos reducidas y tablas para la app (después de anotar hitos.csv)
+python src/07_indice_cambio.py     # índice de cambio visual y alineación diaria (después de 06)
 ```
 
 La tabla para usar en adelante es `data/processed_data/fotos_utilizables.csv` (una fila por fotografía, con `utilizable`, `motivo_exclusion`, `tipo_exclusion`, `tramo_id`, `encuadre_id` y `rotacion_desde_crudo`), junto con `resumen_diario_final.csv` (por día, con `fotos_utiles` y `foto_del_dia` calculados solo con fotos utilizables).
@@ -56,7 +60,7 @@ Los hitos (cambios visibles en la obra) **se identifican a mano**; `05_hojas_sem
 - **Foto semanal.** Por cada semana (lunes a domingo) y `encuadre_id`, entre los días con `estado_dia_final == CON_EVIDENCIA` se elige la `foto_del_dia` con mayor `nitidez`. Una semana repartida entre dos encuadres (2026-01-12 a 2026-01-18) aparece en la hoja de cada uno; una semana sin días con evidencia queda como celda «sin evidencia». Las semanas del periodo sin vista de la obra (2026-02-09 a 2026-03-01) no tienen encuadre y no aparecen. La selección queda en `data/processed_data/fotos_semanales.csv` (`semana_inicio`, `encuadre_id`, `ruta`, `fecha_hora`, `nitidez`).
 - **Hojas.** `reports/hitos/semanas_encuadre_<id>.jpg` (miniaturas de 640 px en orden cronológico, con fecha y hora encima; se dividen en `_parte1`, `_parte2`... si no caben). Siguen la regla para mostrar de abajo.
 - **Modo diario.** Para acotar la fecha de un cambio que se ve entre dos semanas: `python src/05_hojas_semanales.py --dias 2025-10-06 2025-10-12` genera `reports/hitos/dias_<inicio>_<fin>.jpg` con la foto del día de cada día del rango (celda «sin evidencia» con el estado del día donde no hay).
-- **Anotación.** Los hitos se anotan en `data/processed_data/hitos.csv` (`fecha_inicio`, `fecha_fin`, `encuadre_id`, `titulo`, `descripcion`, `ruta_foto_antes`, `ruta_foto_despues`, `confianza` alta/media/baja, `identificado_por` y, opcional, `resumen`: frase breve en presente impersonal, como «se pintan las líneas», que la app usa en «Qué pasó cada mes»; si falta, usa el título). El script la crea solo si no existe, con el hito ya identificado (colocación de la losa del puente, 2025-10-08 a 2025-10-09); si existe, no la toca.
+- **Anotación.** Los hitos se anotan en `data/processed_data/hitos.csv` (`fecha_inicio`, `fecha_fin`, `encuadre_id`, `titulo`, `descripcion`, `ruta_foto_antes`, `ruta_foto_despues`, `confianza` alta/media/baja, `identificado_por` y, opcional, `resumen`, que la app ya no usa). El script la crea solo si no existe, con el hito ya identificado (colocación de la losa del puente, 2025-10-08 a 2025-10-09); si existe, no la toca.
 
 ### Regla para mostrar las fotos
 
@@ -81,15 +85,29 @@ Ignorar la etiqueta y girar siempre 180° da el mismo resultado en todas las fot
 
 ## App web
 
-`app/streamlit_app.py` es la app del proyecto, para la ciudadanía: «Puente sobre el río María Aguilar: lo que muestran las fotos». De arriba abajo: franja con el nombre del puente, la fuente y la fecha de la última foto; portada («Seis meses de obra vistos por una cámara») con el estado de la obra según las fotos, un comparador antes/después y tres cifras (semanas hasta los primeros vehículos, cambios visibles y días seguidos sin fotos); «Qué pasó cada mes»; recorrido por los cambios con una línea de tiempo (botones numerados en pantallas angostas); lo que no se ve (calendario de días con y sin evidencia, con detalle por hora y por qué faltan datos); «Explore por su cuenta», un comparador libre entre dos días elegidos en el calendario, y una línea final sobre el alcance: el sitio muestra solo lo que se ve en las fotos, no presupuesto, plazos ni porcentaje de avance. Todo se calcula de `app/datos`, sin depender de un número fijo de hitos. El tema (tipografía, fondos claro y oscuro) está en `.streamlit/config.toml`; en toda la página el azul significa que hay evidencia de la obra y el bermellón que no la hay.
+`app/streamlit_app.py` es la app del proyecto: «Puente sobre el río María Aguilar: lo que muestran las fotos». Una franja fija con el nombre del puente, la fuente y la fecha de la última foto queda sobre tres pestañas:
 
-La app **solo lee archivos de `app/`**, así que funciona sin `data/raw_data`. Esos archivos los genera `06_fotos_app.py`:
+- **La historia** (capa ciudadana, sin tecnicismos). Arriba, lo esencial: estado de la obra según las fotos y tres cifras. Luego un recorrido en tres partes y un cierre, con una barra que indica en qué parte va el lector:
+  1. *Al inicio*: la primera foto útil.
+  2. *Qué cambió*: scrollytelling con un componente propio (`st.components.v2`). La foto queda fija y los bloques de texto avanzan al desplazarse; cada hito tiene un bloque «antes» y uno «después» que cambian la foto en el mismo lugar (la de después alineada a la de antes), y una línea de tiempo compacta marca el hito actual. Teclado: Tab recorre los bloques; un botón alterna antes y después.
+  3. *Cómo está hoy*: time-lapse con la foto del día de cada día (la útil más cercana a las 12:00), reproducir/pausar, tres velocidades, barra para ir a cualquier día, fecha y hora visibles (resaltada si la foto se aleja más de 30 min del mediodía) y un cuadro «sin foto» en los días sin evidencia, para que la falta se vea como una pausa. Marca el cambio de vista del 4 de marzo. Las fotos se estabilizan con la alineación diaria de 07.
+  4. *Lo que no se ve*: una fila por mes en la que cada punto es una foto (las 21 644), agrupadas por estado (útil, excluida por calidad, de noche, sin vista de la obra) en ese orden y con sus cifras en texto: el estado se lee por color y por posición.
+- **Explorar y verificar** (auditoría): calendario para elegir cualquier día y ver fotos tomadas, utilizables, excluidas por criterio, foto del día, fotos por hora e índice de cambio; comparador libre de dos fechas (alineado dentro de una vista); lista completa de hitos con su claridad y comparador de cada uno.
+- **Datos y método** (auditoría): días por mes según evidencia, fotos por motivo de exclusión, índice de cambio visual con su validación contra los hitos, resumen del método, enlace a la nota metodológica y descarga de las tablas de `app/datos` en CSV.
 
-- `app/fotos/`: la foto del día de cada día con evidencia y las fotos de `hitos.csv` y `fotos_semanales.csv`, reducidas a 960 px de ancho (JPEG calidad 80, sin EXIF, con la regla para mostrar ya aplicada); `miniaturas/` con las fotos semanales a 400 px; índice en `indice.csv` (`fecha`, `encuadre_id`, `vista`, `archivo`, `fecha_hora`).
-- `app/datos/`: `dias.csv`, `evidencia_dia_hora.csv` (por día y hora 0–23: «hay foto útil», «hay foto pero no se ve la obra» o «no hay foto»), `hitos.csv`, `fotos_semanales.csv` (una foto por semana y vista), `vistas.csv` y `alineacion.csv` (corrimiento de la cámara dentro de una vista, para alinear el comparador), con las rutas de fotos relativas a `app/` (`fotos/<archivo>.jpg`).
-- **Vista.** La app agrupa los encuadres 1 y 2 como una sola vista (el 2026-01-17 la cámara solo se corrió ~31 px) y usa `vista` en vez de `encuadre_id`; el único cambio de vista es el del 2026-03-04. `encuadre_id` no cambia en `data/processed_data`.
+Todo se calcula de `app/datos`, sin depender de un número fijo de hitos. Cada gráfico tiene una descripción en texto; las fotos, texto alternativo; los controles funcionan con teclado y la app se adapta a modo claro y oscuro (tema en `.streamlit/config.toml`). Azul significa «hay evidencia» y bermellón «no la hay»; para el estado de cada foto se suman ocre (calidad) y violeta (noche), paleta validada para daltonismo en ambos modos.
 
-Cada vez que se agregan o corrigen hitos en `data/processed_data/hitos.csv` hay que volver a correr `python src/06_fotos_app.py`: agrega las fotos nuevas y borra las que ya no se usan. La app no depende de un número fijo de hitos. `app/` pesa unos 20 MB y se versiona.
+La app **solo lee archivos de `app/`**, así que funciona sin `data/raw_data`:
+
+- `app/static/fotos/` (de 06): la foto del día de cada día con evidencia y las fotos de `hitos.csv`, reducidas a 960 px de ancho (JPEG calidad 80, sin EXIF, con la regla para mostrar ya aplicada), e `indice.csv`. Están en `static/` porque el recorrido y el time-lapse las piden por URL (`server.enableStaticServing = true` en `.streamlit/config.toml`).
+- `app/datos/` (de 06): `dias.csv` (estado, vista, fotos, fotos útiles, foto del día y fotos excluidas por motivo), `fotos.csv` (una fila por foto: fecha, hora y estado, sin rutas ni columnas técnicas), `hitos.csv` y `vistas.csv`. De 07: `indice_cambio.csv` y `alineacion_dia.csv` (transformación de cada día al marco del primer día de su vista; la usan el comparador, el recorrido y el time-lapse). Las rutas de fotos son relativas a `app/` (`static/fotos/<archivo>.jpg`).
+- **Vista.** La app agrupa los encuadres 1 y 2 como una sola vista (el 2026-01-17 la cámara solo se corrió ~31 px) y usa `vista` en vez de `encuadre_id`; el único cambio de vista es el del 2026-03-04. Dentro de una vista la cámara además se desplaza unos píxeles casi a diario (hasta ~74 px y 1,7° en la primera vista); 07 lo mide y la app lo corrige.
+
+### Índice de cambio visual (07)
+
+`src/07_indice_cambio.py` compara, para cada día con evidencia, su imagen con la del día con evidencia anterior de la misma vista: mediana de hasta 5 fotos utilizables cercanas a la foto del día (borra vehículos y personas que pasan), registro contra el día anterior (ORB + RANSAC o, si no alcanza, ECC, partiendo del corrimiento medido por 06), diferencia de estructura (término de contraste y estructura del SSIM, poco sensible a la luz), exclusión del 30 % de la imagen que más cambia siempre (vegetación, ramas, nubes) y atenuación del tráfico habitual. El índice es el % de la zona analizada que cambió; un día es pico si está en el 10 % más alto de su vista. Con los 9 hitos actuales coincide con un pico en 5 (por azar se esperarían ~2) y 6 de 16 picos caen dentro de un hito: sirve como alerta, no para identificar cambios por sí solo. Detalle y limitaciones en la nota metodológica; hoja de revisión en `reports/indice_cambio/`.
+
+Cada vez que se agregan o corrigen hitos en `data/processed_data/hitos.csv` hay que volver a correr `python src/06_fotos_app.py` (agrega las fotos nuevas y borra las que ya no se usan) y `python src/07_indice_cambio.py` (la validación usa los hitos). `app/` pesa unos 19,4 MB y se versiona.
 
 Para correrla localmente:
 
@@ -109,7 +127,7 @@ pip install -r requirements.txt
 
 ## Documentación
 
-La [nota metodológica](docs/nota_metodologica.md) describe la procedencia de los datos, la depuración, la identificación de los cambios, las decisiones de diseño y las limitaciones.
+La [nota metodológica](docs/nota_metodologica.md) describe el público, la procedencia de los datos, la depuración, la identificación de los cambios, el índice de cambio visual, la estructura de la app, las decisiones de diseño y las limitaciones.
 
 ## Equipo
 
