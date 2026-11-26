@@ -11,6 +11,10 @@ data/processed_data/alineacion_corrimientos.csv). Escribe:
   app/datos/alineacion_dia.csv    transformación de cada día al marco del primer día de su
                                   vista (m00..m12; la app la usa para alinear el comparador y
                                   estabilizar el time-lapse)
+  app/static/cambio/<fecha>.png   mapa de cambio de cada día con índice (PNG con transparencia,
+                                  ANCHO_ANALISIS px, en el marco del primer día de la vista):
+                                  zonas que cuentan como cambio en color, el resto transparente;
+                                  la app lo superpone en el comparador («Mostrar dónde cambió»)
   reports/indice_cambio/          hoja con los 12 días de mayor índice (picos.jpg), zona
                                   analizada y diferencia típica por vista, registro_diario.csv
 
@@ -77,6 +81,7 @@ C_ESTRUCTURA = (0.08 * 255) ** 2  # alto: en zonas lisas (asfalto, cielo) el rui
 FACTOR_TIPICO = 2.5        # diferencia ≥ FACTOR_TIPICO × típica del píxel
 DIFERENCIA_MINIMA = 0.25   # y además ≥ este valor (escala 0-1)
 PERCENTIL_ZONA = 70        # se excluye el 30 % de píxeles que más cambia siempre (vegetación, árbol)
+COLOR_MAPA = (126, 0, 230)  # magenta (BGR): no es ni el azul ni el bermellón de la app
 BORDE_PX = 8               # borde excluido (px de análisis)
 PERCENTIL_PICO = 90        # pico: índice ≥ percentil 90 de su vista (10 % de días más altos)
 ORB_PUNTOS, ORB_RATIO, RANSAC_UMBRAL_PX = 5000, 0.75, 3.0  # registro, mismos valores que 06
@@ -206,6 +211,16 @@ def hoja_picos(destino: Path, filas: list[dict], imagenes: dict, mapas: dict) ->
     if celdas:
         destino.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(destino), np.vstack(celdas), [cv2.IMWRITE_JPEG_QUALITY, 80])
+
+
+def guardar_mapa(mapa: np.ndarray, destino: Path) -> None:
+    """Mapa de cambio liviano: relleno semitransparente y borde opaco en COLOR_MAPA (BGR)."""
+    m = mapa.astype(np.uint8)
+    borde = cv2.morphologyEx(m, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8)) > 0
+    rgba = np.zeros((*m.shape, 4), np.uint8)
+    rgba[..., :3] = COLOR_MAPA
+    rgba[..., 3] = np.where(borde, 255, np.where(m > 0, 120, 0))
+    cv2.imwrite(str(destino), rgba, [cv2.IMWRITE_PNG_COMPRESSION, 9])
 
 
 def validar(indice: pd.DataFrame, hitos: pd.DataFrame) -> pd.DataFrame:
@@ -349,6 +364,17 @@ def main() -> None:
     indice["dias_entre"] = indice["dias_entre"].astype("Int64")
     indice["fotos_combinadas"] = indice["fotos_combinadas"].astype("Int64")
     indice[columnas].to_csv(args.app / "datos" / "indice_cambio.csv", index=False)
+
+    # Mapas de cambio para la app (los de días que ya no tienen índice se borran)
+    dir_mapas = args.app / "static" / "cambio"
+    dir_mapas.mkdir(parents=True, exist_ok=True)
+    for fecha, mapa in mapas.items():
+        guardar_mapa(mapa, dir_mapas / f"{fecha}.png")
+    for viejo in dir_mapas.glob("*.png"):
+        if viejo.stem not in mapas:
+            viejo.unlink()
+    tamano = sum(p.stat().st_size for p in dir_mapas.glob("*.png")) / 1e6
+    print(f"Mapas de cambio: {len(mapas)} en app/static/cambio ({tamano:.2f} MB)")
 
     # Hoja de revisión con los 12 días de mayor índice
     top = indice.dropna(subset=["indice"]).nlargest(12, "indice")

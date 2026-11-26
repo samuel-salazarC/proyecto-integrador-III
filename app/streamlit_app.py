@@ -23,7 +23,6 @@ Uso local:
 
 from __future__ import annotations
 
-import base64
 import html
 from pathlib import Path
 
@@ -123,11 +122,6 @@ def cargar() -> dict[str, pd.DataFrame]:
     fotos["hora_h"] = fotos["hora"].str[:2].astype(int)
     return {"dias": dias, "fotos": fotos, "hitos": hitos, "vistas": vistas, "alineacion": alineacion,
             "indice": indice}
-
-
-@st.cache_data
-def imagen_base64(ruta: str) -> str:
-    return base64.b64encode((APP / ruta).read_bytes()).decode()
 
 
 def url_foto(ruta: str) -> str:
@@ -320,9 +314,25 @@ h3 {{ font-size: clamp(1.2rem, 1.05rem + 0.8vw, 1.6rem) !important; line-height:
 .franja b {{ color: {c['tinta']}; font-weight: 700; }}
 .franja .datos {{ display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; }}
 .franja .datos span {{ white-space: nowrap; }}
-/* Pestañas: zona táctil de 44 px y texto legible */
-[data-baseweb="tab-list"] button {{ min-height: 44px; }}
-[data-baseweb="tab-list"] button p {{ font-size: 1rem; font-weight: 600; }}
+/* Pestañas: zona táctil de 44 px, texto legible y nombres completos (si no caben, la fila se
+   desplaza en horizontal en vez de cortarlos) */
+[data-baseweb="tab-list"] {{ overflow-x: auto; scrollbar-width: none; }}
+[data-baseweb="tab-list"] button {{ min-height: 44px; flex-shrink: 0; }}
+[data-baseweb="tab-list"] button p {{ font-size: 1rem; font-weight: 600; white-space: nowrap; }}
+@media (max-width: 420px) {{
+  [data-baseweb="tab-list"] {{ gap: 0.9rem; }}
+  [data-baseweb="tab-list"] button p {{ font-size: 0.93rem; }}
+}}
+/* Destinos de los saltos: quedan bajo la barra superior de Streamlit */
+.ancla {{ scroll-margin-top: 4.5rem; outline: none; }}
+/* Aviso solo en celular (Datos y método) */
+.solo-celular {{ display: none; }}
+/* Índice de cambio: en celular el gráfico conserva un ancho legible y se desplaza en horizontal */
+@media (max-width: 640px) {{
+  .solo-celular {{ display: block; margin: 0.2rem 0 0.4rem; font-size: 0.85rem; color: {c['tenue']}; }}
+  .st-key-indice {{ overflow-x: auto; }}
+  .st-key-indice > div {{ min-width: 720px; }}
+}}
 
 /* Textos */
 .kicker {{ text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.78rem; font-weight: 700;
@@ -347,9 +357,11 @@ h3 {{ font-size: clamp(1.2rem, 1.05rem + 0.8vw, 1.6rem) !important; line-height:
 .cifra .num small {{ font-size: 0.5em; font-weight: 600; margin-left: 0.2em; }}
 .cifra .txt {{ display: block; margin-top: 0.35rem; font-size: 0.93rem; line-height: 1.35; color: {c['tenue']}; }}
 .cifras.cuatro {{ grid-template-columns: repeat(4, minmax(0, 1fr)); }}
+.cifras.tres {{ grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }}
 @media (max-width: 640px) {{
   .cifras {{ grid-template-columns: 1fr; gap: 0.9rem; }}
   .cifras.cuatro {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+  .cifras.tres {{ grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.6rem; }}
 }}
 
 /* Tablas para auditoría */
@@ -380,7 +392,8 @@ h3 {{ font-size: clamp(1.2rem, 1.05rem + 0.8vw, 1.6rem) !important; line-height:
 </style>""")
 
 
-def seccion(kicker: str, titular: str, frase: str | None = None, parte: int | None = None) -> None:
+def seccion(kicker: str, titular: str, frase: str | None = None, parte: int | None = None,
+            id_: str | None = None) -> None:
     """Encabezado de sección: rótulo, titular con la conclusión y como máximo una frase. Con
     `parte`, una barra de avance indica en qué parte de la historia va el lector."""
     barra = ""
@@ -388,7 +401,8 @@ def seccion(kicker: str, titular: str, frase: str | None = None, parte: int | No
         barra = ('<div class="partes" aria-hidden="true">'
                  + "".join(f'<span class="{"hecha" if k <= parte else ""}"></span>' for k in range(1, TOTAL_PARTES + 1))
                  + "</div>")
-    st.html(f'<div class="seccion" aria-hidden="true"></div>{barra}<p class="kicker">{html.escape(kicker)}</p>')
+    marca = f'<div id="{id_}" tabindex="-1" class="ancla"></div>' if id_ else ""
+    st.html(f'<div class="seccion" aria-hidden="true"></div>{marca}{barra}<p class="kicker">{html.escape(kicker)}</p>')
     st.header(titular, anchor=False)
     if frase:
         st.html(f'<p class="bajada">{html.escape(frase)}</p>')
@@ -400,79 +414,393 @@ def descripcion(texto: str, titulo: str = "Descripción del gráfico") -> None:
 
 
 # ============================================================================
-# Comparador (Explorar y verificar)
+# Visor a pantalla completa (compartido por los componentes con fotos)
 # ============================================================================
 
-def html_comparador(a: pd.Series, b: pd.Series, texto_a: str, texto_b: str, c: dict, ajuste: dict | None = None) -> str:
-    """Comparador antes/después con barra deslizante, sin dependencias externas.
+# Tocar o hacer clic en una foto (o en su botón «Ampliar») la abre en un <dialog> modal a
+# pantalla completa: botones para acercar y alejar (también + y −, 0 vuelve al tamaño
+# inicial, doble clic alterna 1× y 2×), flechas para pasar entre las fotos del conjunto
+# (antes y después) y «Cerrar». Escape cierra (comportamiento nativo del <dialog>) y el foco
+# vuelve al elemento que lo abrió. Con zoom, la foto se recorre desplazándose.
+VISOR_CSS = """
+dialog.visor { padding: 0; border: 0; margin: 0; width: 100vw; height: 100dvh; max-width: 100vw; max-height: 100dvh;
+  background: #0c0c0b; color: #fff; font-family: var(--st-font, sans-serif); }
+dialog.visor::backdrop { background: rgba(0, 0, 0, 0.85); }
+.visor .barra { position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.7); z-index: 2; font: 600 0.95rem/1.25 var(--st-font, sans-serif); }
+.visor .barra .tit { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.visor button { min-width: 44px; min-height: 44px; border-radius: 0.5rem; border: 1px solid rgba(255, 255, 255, 0.5);
+  background: transparent; color: #fff; font: 700 1.05rem/1 var(--st-font, sans-serif); cursor: pointer; padding: 0 0.7rem; }
+.visor button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.visor .zona { position: absolute; top: 60px; left: 0; right: 0; bottom: 0; overflow: auto; display: flex; }
+.visor .zona img { display: block; margin: auto; flex-shrink: 0; max-width: none; user-select: none; }
+button.ampliar { position: absolute; right: 8px; bottom: 8px; z-index: 4; min-width: 44px; min-height: 44px; padding: 0 0.7rem;
+  border-radius: 0.5rem; border: 0; background: rgba(20, 20, 19, 0.82); color: #fff; cursor: pointer;
+  font: 600 0.9rem/1 var(--st-font, sans-serif); }
+button.ampliar:hover { background: rgba(20, 20, 19, 0.95); }
+button.ampliar:focus-visible { outline: 3px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 5px rgba(20, 20, 19, 0.9); }
+"""
 
-    La foto de después ocupa todo el cuadro y la de antes se recorta desde la izquierda hasta
-    la posición de la barra, un <input type="range"> transparente sobre las fotos (mouse, dedo
-    o flechas del teclado). Con `ajuste`, la foto de después se mueve para coincidir con la de
-    antes y las dos se amplían un poco para ocultar los bordes sin imagen.
-    """
-    aj = ajuste or {"tx": 0, "ty": 0, "rot": 0, "escala": 1, "zoom": 1, "vx": 0, "vy": 0}
-    alt_a = html.escape(alt_foto(a["fecha_hora_foto"], "Foto de la izquierda (antes)."))
-    alt_b = html.escape(alt_foto(b["fecha_hora_foto"], "Foto de la derecha (después)."))
-    etiqueta = html.escape(f"Barra de comparación: a la izquierda {texto_a}, a la derecha {texto_b}")
-    return f"""<!doctype html><html lang="es"><head><meta charset="utf-8"><style>
-html, body {{ margin:0; padding:0; background:transparent; font-family:system-ui, sans-serif; }}
-.comp {{ position:relative; width:100%; max-width:{ANCHO_CONTENIDO}px; aspect-ratio:{FOTO_PROPORCION}; overflow:hidden;
-        border-radius:{FOTO_RADIO}; border:1px solid {c['borde']}; box-sizing:border-box; line-height:0;
-        user-select:none; touch-action:pan-y; }}
-.comp .lienzo {{ position:relative; transform-origin:0 0; transform:scale({aj['zoom']:.5f}) translate({-aj['vx']:.4f}%, {-aj['vy']:.4f}%); }}
-.comp img {{ width:100%; height:auto; display:block; }}
-.comp .despues {{ transform-origin:50% 50%;
-                 transform:translate({aj['tx']:.4f}%, {aj['ty']:.4f}%) rotate({aj['rot']:.4f}deg) scale({aj['escala']:.5f}); }}
-.comp .antes {{ position:absolute; inset:0; clip-path:inset(0 50% 0 0); }}
-.comp .linea {{ position:absolute; top:0; bottom:0; left:50%; width:3px; margin-left:-1.5px; background:#fff;
-               box-shadow:0 0 4px rgba(0,0,0,.6); pointer-events:none; }}
-.comp .asa {{ position:absolute; top:50%; left:50%; width:44px; height:44px; margin:-22px 0 0 -22px; border-radius:50%;
-             background:#fff; box-shadow:0 1px 8px rgba(0,0,0,.55); pointer-events:none; display:flex; align-items:center;
-             justify-content:center; font:700 18px/1 system-ui, sans-serif; color:#1a1a19; }}
-.comp .rotulo {{ position:absolute; top:10px; padding:5px 9px; border-radius:4px; background:rgba(20,20,19,.8); color:#fff;
-                font:600 13px/1.2 system-ui, sans-serif; pointer-events:none; }}
-.comp .izq {{ left:10px; }} .comp .der {{ right:10px; }}
-.comp input {{ position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:ew-resize; }}
-.comp:has(input:focus-visible) {{ outline:3px solid {c['tinta']}; outline-offset:-3px; }}
-</style></head><body>
-<div class="comp">
-  <div class="lienzo">
-    <img class="despues" src="data:image/jpeg;base64,{imagen_base64(b['foto'])}" alt="{alt_b}">
-    <img class="antes" src="data:image/jpeg;base64,{imagen_base64(a['foto'])}" alt="{alt_a}">
-  </div>
-  <div class="linea"></div><div class="asa" aria-hidden="true">&#8596;</div>
-  <span class="rotulo izq" aria-hidden="true">{html.escape(texto_a)}</span>
-  <span class="rotulo der" aria-hidden="true">{html.escape(texto_b)}</span>
-  <input type="range" min="0" max="100" step="1" value="50" aria-label="{etiqueta}">
-</div>
-<script>
-const c = document.querySelector('.comp'), r = c.querySelector('input');
-const zoom = {aj['zoom']:.5f}, vx = {aj['vx']:.4f};
-function mover() {{
-  const v = r.value, x = vx + v / zoom;  // posición de la barra en la foto (antes del zoom)
-  c.querySelector('.antes').style.clipPath = 'inset(0 ' + (100 - x) + '% 0 0)';
-  c.querySelector('.linea').style.left = v + '%';
-  c.querySelector('.asa').style.left = v + '%';
-  r.setAttribute('aria-valuetext', v + ' por ciento de la foto de la izquierda visible');
-}}
-r.addEventListener('input', mover); mover();
-</script></body></html>"""
+VISOR_JS = """
+function abrirVisor(raiz, fotos, inicial) {
+  const origen = raiz.getRootNode().activeElement;
+  const d = document.createElement('dialog');
+  d.className = 'visor';
+  d.setAttribute('aria-label', 'Foto ampliada');
+  const varias = fotos.length > 1;
+  d.innerHTML = '<div class="barra"><span class="tit" aria-live="polite"></span>' +
+    (varias ? '<button type="button" data-a="ant" aria-label="Foto anterior">&#8249;</button>' +
+              '<button type="button" data-a="sig" aria-label="Foto siguiente">&#8250;</button>' : '') +
+    '<button type="button" data-a="menos" aria-label="Alejar">&#8722;</button>' +
+    '<button type="button" data-a="mas" aria-label="Acercar">+</button>' +
+    '<button type="button" data-a="cerrar" aria-label="Cerrar la foto ampliada (Escape)">&#10005; Cerrar</button></div>' +
+    '<div class="zona"><img alt=""></div>';
+  raiz.appendChild(d);
+  const img = d.querySelector('img'), zona = d.querySelector('.zona'), tit = d.querySelector('.tit');
+  let i = inicial || 0, zoom = 1;
+  function ajustar() {
+    const r = (img.naturalWidth / img.naturalHeight) || 1.25;
+    const base = Math.min(zona.clientWidth, zona.clientHeight * r);
+    img.style.width = Math.round(base * zoom) + 'px';
+    zona.scrollLeft = (zona.scrollWidth - zona.clientWidth) / 2;
+    zona.scrollTop = (zona.scrollHeight - zona.clientHeight) / 2;
+  }
+  function mostrar() {
+    const f = fotos[i];
+    if (img.getAttribute('src') !== f.u) { img.onload = ajustar; img.src = f.u; }
+    img.alt = f.alt || '';
+    tit.textContent = f.t + (varias ? ' (' + (i + 1) + ' de ' + fotos.length + ')' : '') + (zoom > 1 ? ' · ' + zoom + '×' : '');
+    ajustar();
+  }
+  const acercar = (z) => { zoom = Math.min(4, Math.max(1, z)); mostrar(); };
+  const pasar = (k) => { i = (i + k + fotos.length) % fotos.length; mostrar(); };
+  d.addEventListener('click', (e) => {
+    if (e.target === d) { d.close(); return; }
+    const a = e.target.closest('[data-a]');
+    if (!a) return;
+    ({ cerrar: () => d.close(), mas: () => acercar(zoom + 1), menos: () => acercar(zoom - 1),
+       ant: () => pasar(-1), sig: () => pasar(1) })[a.dataset.a]();
+  });
+  img.addEventListener('dblclick', () => acercar(zoom > 1 ? 1 : 2));
+  d.addEventListener('keydown', (e) => {
+    if (e.key === '+' || e.key === '=') acercar(zoom + 1);
+    else if (e.key === '-') acercar(zoom - 1);
+    else if (e.key === '0') acercar(1);
+    else if (varias && e.key === 'ArrowRight' && zoom === 1) pasar(1);
+    else if (varias && e.key === 'ArrowLeft' && zoom === 1) pasar(-1);
+    else return;
+    e.preventDefault();
+  });
+  window.addEventListener('resize', ajustar);
+  d.addEventListener('close', () => {
+    window.removeEventListener('resize', ajustar);
+    d.remove();
+    if (origen && origen.focus) origen.focus({ preventScroll: true });
+  });
+  d.showModal();
+  d.querySelector('[data-a="cerrar"]').focus();
+  mostrar();
+}
+"""
+
+
+def componente(nombre: str, css: str, js: str):
+    """Componente propio con el visor a pantalla completa disponible (abrirVisor)."""
+    return st.components.v2.component(nombre, css=css + VISOR_CSS, js=VISOR_JS + js)
+
+
+def css_transform(t: dict | None) -> str:
+    return f"translate({t['tx']}%,{t['ty']}%) rotate({t['rot']}deg) scale({t['escala']})" if t else "none"
+
+
+def css_ventana(v: dict | None) -> str:
+    return f"scale({v['zoom']}) translate({-v['vx']}%,{-v['vy']}%)" if v else "none"
+
+
+# ============================================================================
+# Foto suelta ampliable (detalle del día)
+# ============================================================================
+
+FOTO_CSS = """
+.foto { font-family: var(--st-font, sans-serif); color: var(--st-text-color); }
+.foto .marco { position: relative; aspect-ratio: 5 / 4; overflow: hidden; border-radius: 10px; border: 1px solid var(--borde);
+  box-sizing: border-box; cursor: zoom-in; }
+.foto .marco img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.foto p { font-size: 0.88rem; opacity: 0.8; margin: 0.35rem 0 0; }
+"""
+
+FOTO_JS = """
+export default function (component) {
+  const { data, parentElement } = component;
+  parentElement.querySelectorAll('.foto').forEach((e) => e.remove());
+  const raiz = document.createElement('div');
+  raiz.className = 'foto';
+  raiz.style.setProperty('--borde', data.borde);
+  parentElement.appendChild(raiz);
+  raiz.innerHTML = '<div class="marco"><img src="' + data.u + '" alt="' + data.alt + '">' +
+    '<button type="button" class="ampliar" aria-label="Ampliar la foto a pantalla completa">&#10530; Ampliar</button></div>' +
+    (data.pie ? '<p>' + data.pie + '</p>' : '');
+  const abrir = () => abrirVisor(raiz, [{ u: data.u, alt: data.alt, t: data.t }], 0);
+  raiz.querySelector('.marco img').addEventListener('click', abrir);
+  raiz.querySelector('.ampliar').addEventListener('click', abrir);
+  return () => raiz.remove();
+}
+"""
+
+foto_componente = componente("foto_ampliable", FOTO_CSS, FOTO_JS)
+
+
+def mostrar_foto(ruta: str, momento: pd.Timestamp, pie: str, c: dict, key: str) -> None:
+    foto_componente(data={"u": url_foto(ruta), "alt": html.escape(alt_foto(momento)), "pie": html.escape(pie),
+                          "t": f"{fecha(momento, dia_semana=True)}, {hora(momento)}", "borde": c["borde"]}, key=key)
+
+
+# ============================================================================
+# Comparador (Explorar y verificar): barra, lado a lado y parpadeo
+# ============================================================================
+
+# Tres modos sobre las mismas dos fotos, con la de después alineada a la de antes cuando son
+# de la misma vista (alineacion_dia.csv) y las dos recortadas a la zona común:
+#   barra      la de antes se recorta hasta la posición de una barra (<input type="range">,
+#              mouse, dedo o flechas del teclado).
+#   lado       las dos fotos una junto a la otra (una sobre otra en pantallas angostas).
+#   parpadeo   alterna las dos fotos cada 0,8 s en el mismo lugar; botón para pausar. Con
+#              «reducir movimiento» empieza en pausa.
+# «Mostrar dónde cambió» (solo si las fechas son días con evidencia consecutivos de la misma
+# vista) superpone el mapa de cambio de 07 en magenta. El modo elegido se recuerda.
+COMPARADOR_CSS = """
+.cmp { font-family: var(--st-font, sans-serif); color: var(--st-text-color); max-width: 960px; }
+.cmp .ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin: 0 0 0.6rem; }
+.cmp .modos { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.cmp button.m, .cmp .pausa { min-height: 44px; padding: 0 0.85rem; border-radius: 0.6rem; border: 1px solid var(--borde);
+  background: transparent; color: inherit; font: 600 0.92rem/1 var(--st-font, sans-serif); cursor: pointer; }
+.cmp button.m[aria-pressed="true"] { border-color: var(--st-text-color); box-shadow: inset 0 0 0 1px var(--st-text-color); }
+.cmp button:focus-visible, .cmp input:focus-visible + .foco { outline: 3px solid var(--st-text-color); outline-offset: 2px; }
+.cmp .chk { display: inline-flex; align-items: center; gap: 0.45rem; min-height: 44px; font-size: 0.95rem; cursor: pointer; }
+.cmp .chk input { width: 20px; height: 20px; accent-color: var(--mapa); }
+.cmp .chk input:focus-visible { outline: 3px solid var(--st-text-color); outline-offset: 2px; }
+.cmp .marco { position: relative; aspect-ratio: 5 / 4; overflow: hidden; border-radius: 10px; border: 1px solid var(--borde);
+  box-sizing: border-box; line-height: 0; user-select: none; touch-action: pan-y; background: var(--fondo2); }
+.cmp .lienzo { position: absolute; inset: 0; transform-origin: 0 0; }
+.cmp .lienzo img { width: 100%; height: auto; display: block; transform-origin: 50% 50%; }
+.cmp .lienzo .encima { position: absolute; inset: 0; }
+.cmp .lienzo .mapa { position: absolute; left: 0; top: 0; width: 100%; height: auto; pointer-events: none; }
+.cmp .rotulo { position: absolute; top: 10px; z-index: 3; padding: 5px 9px; border-radius: 4px; background: rgba(20, 20, 19, 0.82);
+  color: #fff; font: 600 13px/1.2 var(--st-font, sans-serif); pointer-events: none; }
+.cmp .izq { left: 10px; } .cmp .der { right: 10px; }
+.cmp .linea { position: absolute; top: 0; bottom: 0; left: 50%; width: 3px; margin-left: -1.5px; background: #fff; z-index: 2;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6); pointer-events: none; }
+.cmp .asa { position: absolute; top: 50%; left: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; z-index: 2;
+  background: #fff; box-shadow: 0 1px 8px rgba(0, 0, 0, 0.55); pointer-events: none; display: flex; align-items: center;
+  justify-content: center; font: 700 18px/1 system-ui, sans-serif; color: #1a1a19; }
+.cmp input[type=range] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; z-index: 3; }
+.cmp .marco:has(input[type=range]:focus-visible) { outline: 3px solid var(--st-text-color); outline-offset: 2px; }
+.cmp .doble { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.cmp .doble .marco { cursor: zoom-in; }
+.cmp .solo .marco { cursor: zoom-in; }
+.cmp .nota { font-size: 0.88rem; opacity: 0.8; margin: 0.4rem 0 0; line-height: 1.4; }
+.cmp .nota i { display: inline-block; width: 0.8em; height: 0.8em; background: var(--mapa); border-radius: 2px; vertical-align: -0.05em; }
+@media (max-width: 560px) { .cmp .doble { grid-template-columns: 1fr; } }
+"""
+
+COMPARADOR_JS = """
+const memoriaCmp = new Map();
+
+export default function (component) {
+  const { data, parentElement } = component;
+  parentElement.querySelectorAll('.cmp').forEach((e) => e.remove());
+  const m = memoriaCmp.get(data.id) || { modo: 'barra', mapa: false };
+  memoriaCmp.set(data.id, m);
+  if (!data.mapa) m.mapa = false;
+  const raiz = document.createElement('div');
+  raiz.className = 'cmp';
+  Object.entries(data.colores).forEach(([k, v]) => raiz.style.setProperty('--' + k, v));
+  parentElement.appendChild(raiz);
+  const A = data.a, B = data.b;
+  const quieto = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const MODOS = [['barra', 'Barra deslizante'], ['lado', 'Lado a lado'], ['parpadeo', 'Parpadeo']];
+  let temporizador = null, pausado = quieto, verB = false;
+  const fotos = [{ u: A.u, alt: A.alt, t: A.t }, { u: B.u, alt: B.alt, t: B.t }];
+  const tf = (t) => t ? 'translate(' + t.tx + '%,' + t.ty + '%) rotate(' + t.rot + 'deg) scale(' + t.escala + ')' : 'none';
+  const ven = data.ventana ? 'scale(' + data.ventana.zoom + ') translate(' + (-data.ventana.vx) + '%,' + (-data.ventana.vy) + '%)' : 'none';
+  const mapa = () => m.mapa && data.mapa ? '<img class="mapa" alt="" src="' + data.mapa.u + '" style="transform-origin:50% 50%;transform:' + tf(data.mapa.aj) + '">' : '';
+  const img = (f, aj, clase) => '<img class="' + (clase || '') + '" src="' + f.u + '" alt="' + f.alt + '" style="transform:' + tf(aj) + '">';
+  const ampliar = (k) => '<button type="button" class="ampliar" data-ampliar="' + k + '" aria-label="Ampliar las fotos a pantalla completa">&#10530; Ampliar</button>';
+
+  function escena() {
+    if (m.modo === 'barra') {
+      return '<div class="marco"><div class="lienzo" style="transform:' + ven + '">' + img(B, data.aj) +
+        '<div class="encima antes">' + img(A, null) + '</div>' + mapa() + '</div>' +
+        '<div class="linea"></div><div class="asa" aria-hidden="true">&#8596;</div>' +
+        '<span class="rotulo izq" aria-hidden="true">' + A.t + '</span><span class="rotulo der" aria-hidden="true">' + B.t + '</span>' +
+        '<input type="range" min="0" max="100" step="1" value="' + (m.barra || 50) + '" aria-label="Barra de comparación: a la izquierda ' +
+        A.t + ', a la derecha ' + B.t + '">' + ampliar(0) + '</div>';
+    }
+    if (m.modo === 'lado') {
+      return '<div class="doble">' +
+        '<div class="marco" data-foto="0"><div class="lienzo" style="transform:' + ven + '">' + img(A, null) + '</div>' +
+        '<span class="rotulo izq" aria-hidden="true">' + A.t + '</span>' + ampliar(0) + '</div>' +
+        '<div class="marco" data-foto="1"><div class="lienzo" style="transform:' + ven + '">' + img(B, data.aj) + mapa() + '</div>' +
+        '<span class="rotulo izq" aria-hidden="true">' + B.t + '</span>' + ampliar(1) + '</div></div>';
+    }
+    return '<div class="solo"><div class="marco" data-foto="parpadeo"><div class="lienzo" style="transform:' + ven + '">' + img(A, null) +
+      '<div class="encima despues">' + img(B, data.aj) + '</div>' + mapa() + '</div>' +
+      '<span class="rotulo izq" aria-hidden="true"></span>' + ampliar('parpadeo') + '</div></div>';
+  }
+
+  function dibujar(enfocar) {
+    clearInterval(temporizador);
+    let h = '<div class="ctl"><div class="modos" role="group" aria-label="Modo de comparación">' +
+      MODOS.map(([k, t]) => '<button type="button" class="m" data-m="' + k + '" aria-pressed="' + (m.modo === k) + '">' + t + '</button>').join('') +
+      '</div>' + (m.modo === 'parpadeo' ? '<button type="button" class="pausa"></button>' : '') +
+      (data.mapa ? '<label class="chk"><input type="checkbox"' + (m.mapa ? ' checked' : '') + '> Mostrar dónde cambió</label>' : '') +
+      '</div>' + escena();
+    if (data.mapa && m.mapa) h += '<p class="nota"><i></i> Zonas donde el índice de cambio visual detectó un cambio entre estas dos fechas (' +
+      data.mapa.indice + ' de la zona analizada). Las zonas que cambian casi siempre (vegetación, nubes) no se analizan.</p>';
+    else if (data.nota) h += '<p class="nota">' + data.nota + '</p>';
+    raiz.innerHTML = h;
+    raiz.querySelectorAll('button.m').forEach((b) => b.addEventListener('click', () => { m.modo = b.dataset.m; dibujar('[data-m="' + m.modo + '"]'); }));
+    const chk = raiz.querySelector('.chk input');
+    if (chk) chk.addEventListener('change', () => { m.mapa = chk.checked; dibujar('.chk input'); });
+    raiz.querySelectorAll('[data-ampliar]').forEach((b) => b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const k = b.dataset.ampliar;
+      abrirVisor(raiz, fotos, k === 'parpadeo' ? (verB ? 1 : 0) : Number(k));
+    }));
+    raiz.querySelectorAll('[data-foto]').forEach((el) => el.addEventListener('click', () => {
+      const k = el.dataset.foto;
+      abrirVisor(raiz, fotos, k === 'parpadeo' ? (verB ? 1 : 0) : Number(k));
+    }));
+    if (m.modo === 'barra') {
+      const r = raiz.querySelector('input[type=range]'), z = data.ventana ? data.ventana.zoom : 1, vx = data.ventana ? data.ventana.vx : 0;
+      const mover = () => {
+        const v = Number(r.value), x = vx + v / z;
+        m.barra = v;
+        raiz.querySelector('.antes').style.clipPath = 'inset(0 ' + (100 - x) + '% 0 0)';
+        raiz.querySelector('.linea').style.left = v + '%';
+        raiz.querySelector('.asa').style.left = v + '%';
+        r.setAttribute('aria-valuetext', v + ' por ciento de la foto de la izquierda visible');
+      };
+      r.addEventListener('input', mover); mover();
+    }
+    if (m.modo === 'parpadeo') {
+      const capa = raiz.querySelector('.despues'), rot = raiz.querySelector('.solo .rotulo'), boton = raiz.querySelector('.pausa');
+      const poner = () => { capa.style.opacity = verB ? 1 : 0; rot.textContent = (verB ? 'Después · ' : 'Antes · ') + (verB ? B.t : A.t); };
+      const botones = () => { boton.textContent = pausado ? '▶ Reanudar' : '❚❚ Pausar';
+        boton.setAttribute('aria-label', pausado ? 'Reanudar el parpadeo' : 'Pausar el parpadeo'); };
+      const correr = () => { clearInterval(temporizador); if (!pausado) temporizador = setInterval(() => { verB = !verB; poner(); }, 800); };
+      boton.addEventListener('click', () => { pausado = !pausado; botones(); correr(); });
+      poner(); botones(); correr();
+    }
+    if (enfocar) { const el = raiz.querySelector(enfocar); if (el) el.focus({ preventScroll: true }); }
+  }
+  dibujar();
+  return () => { clearInterval(temporizador); raiz.remove(); };
+}
+"""
+
+comparador_componente = componente("comparador", COMPARADOR_CSS, COMPARADOR_JS)
+
+
+def mapa_de_cambio(d: dict, a: pd.Series, b: pd.Series) -> dict | None:
+    """Mapa de 07 para el par (a, b) si b se comparó con a en el índice (días con evidencia
+    consecutivos de la misma vista), con la transformación que lo lleva al marco de la foto de a."""
+    fila = d["indice"][d["indice"]["fecha"].eq(b["fecha"]) & d["indice"]["fecha_anterior"].eq(a["fecha"])]
+    ruta = APP / "static" / "cambio" / f"{b['fecha']:%Y-%m-%d}.png"
+    t_a = matriz_dia(d["alineacion"], a["fecha"])
+    if fila.empty or pd.isna(fila.iloc[0]["indice"]) or not ruta.exists() or t_a is None:
+        return None
+    # El mapa está en el marco del primer día de la vista; T_a lleva ese marco al de la foto de a
+    return {"u": url_foto(f"static/cambio/{ruta.name}"), "aj": transformacion_css(t_a),
+            "indice": f"{decimal(fila.iloc[0]['indice'])} %"}
 
 
 def mostrar_comparacion(d: dict, c: dict, a: pd.Series, b: pd.Series, texto_a: str | None = None,
-                        texto_b: str | None = None) -> None:
-    """Deslizador si las dos fechas son de la misma vista (alineadas con alineacion_dia.csv);
-    si no, las dos fotos lado a lado con aviso."""
+                        texto_b: str | None = None, key: str = "comparador") -> None:
+    """Comparador en tres modos si las dos fechas son de la misma vista (alineadas); si no, las
+    dos fotos lado a lado con aviso."""
     texto_a, texto_b = texto_a or fecha(a["fecha"]), texto_b or fecha(b["fecha"])
-    if a["vista"] == b["vista"]:
-        ajuste = ajuste_par(d["alineacion"], a["fecha"], b["fecha"])
-        st.iframe(html_comparador(a, b, texto_a, texto_b, c, ajuste), height="content")
-    else:
+    misma = a["vista"] == b["vista"]
+    if not misma:
         st.warning("La cámara apuntaba a otro lugar en una de estas fechas (otra vista): las fotos no se pueden "
-                   "superponer.", icon="⚠️")
-        for col, fila, texto in zip(st.columns(2, gap="medium"), [a, b], [texto_a, texto_b]):
-            col.image(str(APP / fila["foto"]), width="stretch", alt=alt_foto(fila["fecha_hora_foto"]), caption=texto)
+                   "superponer y solo se muestran lado a lado.", icon="⚠️")
+    ajuste = ajuste_par(d["alineacion"], a["fecha"], b["fecha"]) if misma else None
+    mapa = mapa_de_cambio(d, a, b) if misma else None
+    datos = {
+        "id": key,
+        "a": {"u": url_foto(a["foto"]), "alt": html.escape(alt_foto(a["fecha_hora_foto"], "Foto de antes.")), "t": texto_a},
+        "b": {"u": url_foto(b["foto"]), "alt": html.escape(alt_foto(b["fecha_hora_foto"], "Foto de después.")), "t": texto_b},
+        "aj": {k: ajuste[k] for k in ("tx", "ty", "rot", "escala")} if ajuste else None,
+        "ventana": {k: ajuste[k] for k in ("zoom", "vx", "vy")} if ajuste else None,
+        "mapa": mapa,
+        "nota": None if mapa or not misma else "«Mostrar dónde cambió» está disponible solo para dos días con evidencia "
+                                               "consecutivos de la misma vista.",
+        "colores": {"borde": c["borde"], "fondo2": c["fondo2"], "mapa": "#E6007E"},
+    }
+    comparador_componente(data=datos, key=key)
+
+
+# ============================================================================
+# Navegación: del dato a la evidencia
+# ============================================================================
+
+# «Ver en detalle» (hitos, picos del índice, días del time-lapse) deja elegidos el día y, si
+# corresponde, el par de fechas en «Explorar y verificar», cambia a esa pestaña (las pestañas
+# guardan su estado: st.tabs con key y on_change) y desplaza la página hasta la sección. Como
+# la pestaña es un widget, no se puede cambiar después de dibujarla: se guarda en
+# «ir_pestana» y se aplica al comienzo de la siguiente ejecución, antes de st.tabs.
+PESTANAS = ["La historia", "Explorar y verificar", "Datos y método"]
+EXPLORAR = PESTANAS[1]
+
+
+def ir_a_detalle(dia: str, par: tuple[str, str] | None = None, motivo: str = "") -> None:
+    ss = st.session_state
+    ss.dia_explora = dia
+    if par:
+        ss.fechas_explora = tuple(sorted(par))
+    destino = "comparar" if par else "detalle-dia"
+    ss.ir_pestana = EXPLORAR
+    ss.desplazar = {"id": destino, "n": ss.get("desplazar_n", 0) + 1}
+    ss.desplazar_n = ss.desplazar["n"]
+    ss.aviso_detalle = {"id": destino, "texto": motivo}
+
+
+def aviso_de_detalle(destino: str) -> None:
+    aviso = st.session_state.get("aviso_detalle")
+    if aviso and aviso["id"] == destino:
+        st.success(aviso["texto"], icon="✅")
+        del st.session_state["aviso_detalle"]
+
+
+def atender_detalle(valor) -> None:
+    """Valor de un componente con «Ver en detalle»: {'dia': ...} o {'a': ..., 'b': ..., 'texto': ...}."""
+    if not valor:
+        return
+    if valor.get("a") and valor.get("b"):
+        ir_a_detalle(valor["b"], (valor["a"], valor["b"]), valor.get("texto", ""))
+    elif valor.get("dia"):
+        ir_a_detalle(valor["dia"], None, valor.get("texto", ""))
+    else:
+        return
+    st.rerun()
+
+
+DESPLAZAR_JS = """
+export default function (component) {
+  const { data } = component;
+  let intentos = 0;
+  const ir = () => {
+    const el = document.getElementById(data.id);
+    if (!el) { if (intentos++ < 20) setTimeout(ir, 150); return; }
+    el.scrollIntoView({ block: 'start' });
+    el.focus({ preventScroll: true });
+  };
+  setTimeout(ir, 250);
+}
+"""
+
+desplazar_componente = st.components.v2.component("desplazar", js=DESPLAZAR_JS)
+
 
 
 # ============================================================================
@@ -558,8 +886,21 @@ def lo_esencial(d: dict) -> None:
 # arriba y el texto pasa por debajo. Teclado: cada bloque es enfocable (Tab) y al enfocarlo
 # se desplaza a la altura de lectura; el botón «Ver antes/después» alterna la foto.
 HISTORIA_CSS = """
+.histw { font-family: var(--st-font, sans-serif); color: var(--st-text-color); }
+.saltos { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 1.1rem; }
+.saltos .rot { font-size: 0.85rem; opacity: 0.75; margin-right: 0.2rem; }
+.saltos button { min-height: 44px; min-width: 44px; padding: 0 0.8rem; border-radius: 0.6rem; border: 1px solid var(--borde);
+  background: transparent; color: inherit; font: 600 0.92rem/1 var(--st-font, sans-serif); cursor: pointer; }
+.saltos button.num { padding: 0; font-variant-numeric: tabular-nums; }
+.saltos button:hover { border-color: var(--st-text-color); }
+.saltos button:focus-visible { outline: 3px solid var(--st-text-color); outline-offset: 2px; }
 .hist { position: relative; font-family: var(--st-font, sans-serif); color: var(--st-text-color);
   --top: 3.6rem; display: grid; grid-template-columns: minmax(0, 1fr); }
+.hist .marco { cursor: zoom-in; }
+.hist .tarjeta .detalle { margin-top: 0.6rem; min-height: 44px; padding: 0 0.9rem; border-radius: 0.6rem; border: 1px solid var(--borde);
+  background: transparent; color: inherit; font: 600 0.92rem/1 var(--st-font, sans-serif); cursor: pointer; }
+.hist .tarjeta .detalle:hover { border-color: var(--st-text-color); }
+.hist .tarjeta .detalle:focus-visible { outline: 3px solid var(--st-text-color); outline-offset: 2px; }
 .hist .graf { position: sticky; top: var(--top); z-index: 2; background: var(--st-background-color);
   padding: 0.35rem 0 0.6rem; align-self: start; }
 .hist .cab { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 44px; }
@@ -610,10 +951,10 @@ HISTORIA_CSS = """
 
 HISTORIA_JS = """
 export default function (component) {
-  const { data, parentElement } = component;
-  parentElement.querySelectorAll('.hist').forEach((e) => e.remove());
+  const { data, parentElement, setTriggerValue } = component;
+  parentElement.querySelectorAll('.histw').forEach((e) => e.remove());
   const raiz = document.createElement('div');
-  raiz.className = 'hist';
+  raiz.className = 'histw';
   Object.entries(data.colores).forEach(([k, v]) => raiz.style.setProperty('--' + k, v));
   parentElement.appendChild(raiz);
   const pasos = data.pasos;
@@ -622,7 +963,11 @@ export default function (component) {
   const transform = (t) => t ? 'translate(' + t.tx + '%,' + t.ty + '%) rotate(' + t.rot + 'deg) scale(' + t.escala + ')' : 'none';
   const ventana = (v) => v ? 'scale(' + v.zoom + ') translate(' + (-v.vx) + '%,' + (-v.vy) + '%)' : 'none';
 
-  let h = '<div class="graf"><div class="cab"><p class="parte" aria-hidden="true"></p>' +
+  // Botones para saltar a cualquier parte: a un paso del recorrido o a una sección de la página
+  let h = '<nav class="saltos" aria-label="Ir a una parte de la historia"><span class="rot" aria-hidden="true">Ir a</span>' +
+    data.saltos.map((s, k) => '<button type="button" data-salto="' + k + '"' + (s.aria ? ' aria-label="' + s.aria + '"' : '') +
+      (s.n ? ' class="num"' : '') + '>' + s.t + '</button>').join('') + '</nav><div class="hist">';
+  h += '<div class="graf"><div class="cab"><p class="parte" aria-hidden="true"></p>' +
     '<button type="button" class="alternar" hidden></button></div>' +
     '<div class="eje" aria-hidden="true"><div class="linea"></div>' +
     data.eje.meses.map((m) => '<span class="mes" style="left:' + m.x + '%">' + m.texto + '</span>').join('') +
@@ -630,9 +975,10 @@ export default function (component) {
     '</div><div class="marco">' +
     pasos.map((p, i) => '<div class="cuadro" data-i="' + i + '"><div class="lienzo" style="transform:' + ventana(p.ventana) +
       '"><img alt="' + p.alt + '" data-src="' + p.foto + '" style="transform:' + transform(p.ajuste) + '"></div></div>').join('') +
-    '<span class="rotulo" aria-hidden="true"></span></div></div>';
+    '<span class="rotulo" aria-hidden="true"></span>' +
+    '<button type="button" class="ampliar" aria-label="Ampliar la foto a pantalla completa">&#10530; Ampliar</button></div></div>';
   h += '<div class="pasos">' + pasos.map((p, i) => '<section class="paso" data-i="' + i + '"><div class="tarjeta" tabindex="0">' +
-    p.html + '</div></section>').join('') + '</div>';
+    p.html + '</div></section>').join('') + '</div></div>';
   raiz.innerHTML = h;
 
   const cuadros = [...raiz.querySelectorAll('.cuadro')];
@@ -641,6 +987,7 @@ export default function (component) {
   const parte = raiz.querySelector('.parte');
   const alternar = raiz.querySelector('.alternar');
   const puntos = [...raiz.querySelectorAll('.punto')];
+  const tarjetas = secciones.map((s) => s.querySelector('.tarjeta'));
   let actual = -1, mostrado = -1;
 
   function cargar(i) {
@@ -672,6 +1019,24 @@ export default function (component) {
     });
     mostrar(i);
   }
+  // Foto a pantalla completa: el par antes/después del paso actual (o la foto sola)
+  function ampliar() {
+    const p = pasos[actual];
+    const ids = p.par !== null && p.par !== undefined ? [Math.min(actual, p.par), Math.max(actual, p.par)] : [actual];
+    abrirVisor(raiz, ids.map((k) => ({ u: pasos[k].foto, alt: pasos[k].alt, t: pasos[k].rotulo })), Math.max(0, ids.indexOf(mostrado)));
+  }
+  raiz.querySelector('.marco').addEventListener('click', (e) => { if (!e.target.closest('.ampliar')) ampliar(); });
+  raiz.querySelector('.graf .ampliar').addEventListener('click', ampliar);
+  raiz.querySelectorAll('[data-detalle-a]').forEach((b) => b.addEventListener('click', () => {
+    setTriggerValue('detalle', { a: b.dataset.detalleA, b: b.dataset.detalleB, texto: b.dataset.texto });
+  }));
+  raiz.querySelectorAll('[data-salto]').forEach((b) => b.addEventListener('click', () => {
+    const s = data.saltos[Number(b.dataset.salto)];
+    if (s.paso !== undefined && s.paso !== null) { tarjetas[s.paso].focus(); return; }
+    const el = document.getElementById(s.ancla);
+    if (el) { el.scrollIntoView({ block: 'start', behavior: quieto ? 'auto' : 'smooth' }); el.focus({ preventScroll: true }); }
+  }));
+
   alternar.addEventListener('click', () => {
     const p = pasos[actual];
     if (p.par === null || p.par === undefined) return;
@@ -680,7 +1045,6 @@ export default function (component) {
 
   // Paso activo: el último cuya tarjeta ya pasó la línea de lectura. Se calcula con la posición y no con IntersectionObserver para que un salto
   // rápido (rueda, teclado, barra de desplazamiento) no deje la foto desfasada.
-  const tarjetas = secciones.map((s) => s.querySelector('.tarjeta'));
   let pendiente = false;
   function revisar() {
     pendiente = false;
@@ -697,9 +1061,14 @@ export default function (component) {
   const alDesplazar = () => { if (!pendiente) { pendiente = true; requestAnimationFrame(revisar); } };
   document.addEventListener('scroll', alDesplazar, { capture: true, passive: true });
   window.addEventListener('resize', alDesplazar);
+  // Al enfocar una tarjeta (Tab o botones de salto) se lleva a la altura de lectura: al centro
+  // con la foto al lado; justo debajo de la foto fija en pantallas angostas.
   secciones.forEach((s) => s.querySelector('.tarjeta').addEventListener('focus', () => {
     activar(Number(s.dataset.i));
-    s.scrollIntoView({ block: 'center', behavior: quieto ? 'auto' : 'smooth' });
+    const t = s.querySelector('.tarjeta'), g = raiz.querySelector('.graf').getBoundingClientRect();
+    const alLado = g.left >= t.getBoundingClientRect().right;
+    t.style.scrollMarginTop = alLado ? '' : Math.round(g.height + parseFloat(getComputedStyle(raiz.querySelector('.graf')).top) + 12) + 'px';
+    t.scrollIntoView({ block: alLado ? 'center' : 'start', behavior: quieto ? 'auto' : 'smooth' });
   }));
   activar(0);
   revisar();
@@ -711,7 +1080,7 @@ export default function (component) {
 }
 """
 
-historia_componente = st.components.v2.component("historia_recorrido", css=HISTORIA_CSS, js=HISTORIA_JS)
+historia_componente = componente("historia_recorrido", HISTORIA_CSS, HISTORIA_JS)
 
 
 def x_en_periodo(dias: pd.DataFrame, f: pd.Timestamp, margen: float = 2.0) -> float:
@@ -719,14 +1088,28 @@ def x_en_periodo(dias: pd.DataFrame, f: pd.Timestamp, margen: float = 2.0) -> fl
     return round(margen + (f - inicio) / (fin - inicio) * (100 - 2 * margen), 3)
 
 
-def tarjeta(meta: str, titulo: str | None, parrafos: list[str], clar: str | None = None) -> str:
+def tarjeta(meta: str, titulo: str | None, parrafos: list[str], clar: str | None = None,
+            detalle: dict | None = None) -> str:
     partes = [f'<p class="meta">{html.escape(meta)}</p>']
     if titulo:
         partes.append(f"<h3>{html.escape(titulo)}</h3>")
     partes += [f"<p>{html.escape(t)}</p>" for t in parrafos]
     if clar:
         partes.append(f'<p class="clar">Qué tan claro se ve en las fotos: <b>{html.escape(clar)}</b></p>')
+    if detalle:
+        partes.append(f'<button type="button" class="detalle" data-detalle-a="{detalle["a"]}" data-detalle-b="{detalle["b"]}" '
+                      f'data-texto="{html.escape(detalle["texto"])}" aria-label="{html.escape(detalle["aria"])}">'
+                      "Ver en detalle →</button>")
     return "".join(partes)
+
+
+def detalle_hito(h) -> dict:
+    """Par de fechas del hito para «Ver en detalle» y el aviso que se muestra al llegar."""
+    a, b = h.fecha_hora_antes.normalize(), h.fecha_hora_despues.normalize()
+    return {"a": f"{a:%Y-%m-%d}", "b": f"{b:%Y-%m-%d}",
+            "texto": f"Cambio {h.numero}, {minuscula(h.titulo)}: comparador con el {fecha(a)} y el {fecha(b)}, y detalle "
+                     f"del {fecha(b)}.",
+            "aria": f"Ver en detalle el cambio {h.numero}: {h.titulo}"}
 
 
 def datos_recorrido(d: dict, c: dict) -> dict:
@@ -766,11 +1149,17 @@ def datos_recorrido(d: dict, c: dict) -> dict:
             "rotulo": f"Después · {fecha(h.fecha_hora_despues, dia_semana=True)}, {hora(h.fecha_hora_despues)}",
             "ajuste": aj_despues, "ventana": ventana,
             "html": tarjeta(f"Cambio {h.numero} de {total} · después · {rango(h.fecha_inicio, h.fecha_fin)}", h.titulo,
-                            [h.descripcion], claridad(pd.Series(h._asdict())))})
+                            [h.descripcion], claridad(pd.Series(h._asdict())), detalle_hito(h))})
     inicio, fin = dias["fecha"].min(), dias["fecha"].max()
     meses_eje = pd.date_range(inicio.to_period("M").to_timestamp(), fin, freq="MS")
+    saltos = [{"t": "Inicio", "paso": 0, "aria": "Ir al inicio del recorrido"}]
+    saltos += [{"t": str(p["hito"]), "n": True, "paso": k, "aria": f"Ir al cambio {p['hito']}: {hitos.iloc[p['hito'] - 1]['titulo']}"}
+               for k, p in enumerate(pasos) if p["tipo"] == "antes"]
+    saltos += [{"t": "Hoy", "ancla": "parte-hoy", "aria": "Ir a la parte 3: cómo está hoy"},
+               {"t": "Lo que no se ve", "ancla": "parte-no-se-ve", "aria": "Ir al cierre: lo que no se ve"}]
     return {
         "pasos": pasos,
+        "saltos": saltos,
         "eje": {"meses": [{"x": x_en_periodo(dias, max(m + pd.Timedelta(days=14), inicio)), "texto": MESES[m.month - 1]}
                           for m in meses_eje],
                 "hitos": [{"n": int(h.numero), "x": x_en_periodo(dias, h.fecha_fin)} for h in hitos.itertuples()]},
@@ -785,7 +1174,8 @@ def recorrido(d: dict, c: dict) -> None:
             f"{palabra(n, True) if n < len(NUMEROS) else n} {'cambio visible' if n == 1 else 'cambios visibles'} en la obra"
             if n else "Cómo estaba la obra al inicio",
             "Baje para avanzar: la foto se queda fija y cambia con el texto." if n else None, parte=2 if n else 1)
-    historia_componente(data=datos_recorrido(d, c), key="recorrido")
+    resultado = historia_componente(data=datos_recorrido(d, c), key="recorrido", on_detalle_change=lambda: None)
+    atender_detalle(getattr(resultado, "detalle", None))
 
 
 # ============================================================================
@@ -803,7 +1193,8 @@ TIMELAPSE_CSS = """
 .tl .marco { position: relative; aspect-ratio: 5 / 4; overflow: hidden; border-radius: 10px; border: 1px solid var(--borde);
   box-sizing: border-box; background: var(--fondo2); width: min(100%, calc((100vh - 17rem) * 1.25)); }
 .tl .lienzo { position: absolute; inset: 0; transform-origin: 0 0; }
-.tl .lienzo img { width: 100%; height: auto; display: block; transform-origin: 50% 50%; }
+.tl .lienzo img { width: 100%; height: auto; display: block; transform-origin: 50% 50%; cursor: zoom-in; }
+.tl .ampliar[hidden] { display: none; }
 .tl .vacio { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center;
   gap: 0.4rem; text-align: center; padding: 1rem; background: var(--hueco); border: 2px dashed var(--no); border-radius: 10px;
   box-sizing: border-box; }
@@ -845,7 +1236,7 @@ TIMELAPSE_CSS = """
 
 TIMELAPSE_JS = """
 export default function (component) {
-  const { data, parentElement } = component;
+  const { data, parentElement, setTriggerValue } = component;
   parentElement.querySelectorAll('.tl').forEach((e) => e.remove());
   const raiz = document.createElement('div');
   raiz.className = 'tl';
@@ -858,10 +1249,12 @@ export default function (component) {
 
   raiz.innerHTML = '<div class="marco"><div class="lienzo"><img alt=""></div>' +
     '<div class="vacio" aria-hidden="true"><b>Sin foto de la obra</b><span></span></div>' +
-    '<span class="fecha" aria-hidden="true"></span><span class="aviso" aria-hidden="true"></span></div>' +
+    '<span class="fecha" aria-hidden="true"></span><span class="aviso" aria-hidden="true"></span>' +
+    '<button type="button" class="ampliar" aria-label="Pausar y ampliar la foto a pantalla completa">&#10530; Ampliar</button></div>' +
     '<div class="controles"><button type="button" class="play"></button>' +
     '<div class="vel" role="group" aria-label="Velocidad"><span class="rot" aria-hidden="true">Velocidad</span>' +
     VELOCIDADES.map((v, k) => '<button type="button" data-v="' + k + '">' + v[0] + '</button>').join('') + '</div>' +
+    '<button type="button" class="ir">Ver este día en detalle →</button>' +
     '<span class="pos" aria-hidden="true"></span></div>' +
     '<div class="barra"><input type="range" min="0" max="' + (N - 1) + '" step="1" aria-label="Día del time-lapse">' +
     '<div class="tira" aria-hidden="true">' + C.map((c) => '<span class="' + c.e + '"></span>').join('') + '</div>' +
@@ -894,6 +1287,7 @@ export default function (component) {
       img.style.transform = c.a ? 'translate(' + c.a.tx + '%,' + c.a.ty + '%) rotate(' + c.a.rot + 'deg) scale(' + c.a.escala + ')' : 'none';
     } else vacio.textContent = c.motivo;
     fecha.innerHTML = c.t + (c.h ? '<small class="' + (c.lejos ? 'lejos' : '') + '">' + c.h + '</small>' : '');
+    btnAmpliar.hidden = !c.u;
     aviso.textContent = c.aviso || '';
     aviso.classList.toggle('visible', !!c.aviso);
     pos.textContent = 'Día ' + (i + 1) + ' de ' + N;
@@ -928,6 +1322,18 @@ export default function (component) {
     botonesVel.forEach((b, k) => b.setAttribute('aria-pressed', k === vel ? 'true' : 'false'));
   }
   play.addEventListener('click', () => (reproduciendo ? pausar() : reproducir()));
+  const btnAmpliar = raiz.querySelector('.ampliar');
+  function ampliar() {
+    if (reproduciendo) pausar();
+    const c = C[i];
+    if (c.u) abrirVisor(raiz, [{ u: c.u, alt: c.alt, t: c.largo + ', ' + c.h }], 0);
+  }
+  btnAmpliar.addEventListener('click', ampliar);
+  img.addEventListener('click', ampliar);
+  raiz.querySelector('.ir').addEventListener('click', () => {
+    if (reproduciendo) pausar();
+    setTriggerValue('detalle', { dia: C[i].f, texto: 'Detalle del ' + C[i].largo + ', elegido en el time-lapse.' });
+  });
   botonesVel.forEach((b, k) => b.addEventListener('click', () => {
     vel = k;
     if (reproduciendo) reproducir(); else actualizarBotones();
@@ -943,7 +1349,7 @@ export default function (component) {
 }
 """
 
-timelapse_componente = st.components.v2.component("timelapse", css=TIMELAPSE_CSS, js=TIMELAPSE_JS)
+timelapse_componente = componente("timelapse", TIMELAPSE_CSS, TIMELAPSE_JS)
 
 
 def estabilizacion(alineacion: pd.DataFrame) -> tuple[dict, dict]:
@@ -968,7 +1374,7 @@ def datos_timelapse(d: dict, c: dict) -> dict:
     cambios = list(cambios_de_vista(vistas))
     cuadros = []
     for r in dias.itertuples():
-        base = {"t": fecha(r.fecha, dia_semana=True), "largo": fecha_larga(r.fecha, dia_semana=True),
+        base = {"f": f"{r.fecha:%Y-%m-%d}", "t": fecha(r.fecha, dia_semana=True), "largo": fecha_larga(r.fecha, dia_semana=True),
                 "e": CLAVE_ESTADO[r.estado]}
         aviso = next((f"Desde el {fecha(f, anio=False)} la cámara muestra otra vista" for f in cambios
                       if pd.Timedelta(0) <= r.fecha - f < pd.Timedelta(days=4)), None)
@@ -996,10 +1402,12 @@ def hoy(d: dict) -> None:
     util = utiles(dias)
     ultima = util.iloc[-1]
     cambio = cambios_de_vista(d["vistas"])
-    seccion("Parte 3 · Cómo está hoy", f"La última foto útil es del {fecha_larga(ultima['fecha'])}",
+    seccion("Parte 3 · Cómo está hoy", f"La última foto útil es del {fecha_larga(ultima['fecha'])}", id_="parte-hoy",
+            frase=
             "Cada cuadro es un día, con la foto más cercana al mediodía. Los días sin evidencia aparecen como una "
             "pausa en lugar de saltarse.", parte=3)
-    timelapse_componente(data=datos_timelapse(d, d["c"]), key="timelapse")
+    resultado = timelapse_componente(data=datos_timelapse(d, d["c"]), key="timelapse", on_detalle_change=lambda: None)
+    atender_detalle(getattr(resultado, "detalle", None))
     lejos = util[(util["fecha_hora_foto"].dt.hour * 60 + util["fecha_hora_foto"].dt.minute - 720).abs()
                  > MINUTOS_LEJOS_MEDIODIA]
     texto = []
@@ -1138,7 +1546,7 @@ export default function (component) {
 }
 """
 
-puntos_componente = st.components.v2.component("puntos_por_mes", css=PUNTOS_CSS, js=PUNTOS_JS)
+puntos_componente = componente("puntos_por_mes", PUNTOS_CSS, PUNTOS_JS)
 
 
 def conteo_mensual(fotos: pd.DataFrame) -> pd.DataFrame:
@@ -1154,7 +1562,7 @@ def lo_que_no_se_ve(d: dict, c: dict) -> None:
             f"En {MESES_LARGO[poco.month - 1]} de {poco.year} casi no hay fotos útiles de la obra",
             f"Cada punto es una de las {miles(len(d['fotos']))} fotos que tomó la cámara. "
             f"{mes_largo(mucho)} tiene {miles(util[mucho])} fotos útiles; {MESES_LARGO[poco.month - 1]} de {poco.year}, "
-            f"solo {miles(util[poco])}.", parte=4)
+            f"solo {miles(util[poco])}.", parte=4, id_="parte-no-se-ve")
     etiquetas = {CLAVE_FOTO[e]: mayuscula(e) for e in ESTADOS_FOTO}
     meses = []
     for periodo, fila in tabla.iterrows():
@@ -1191,6 +1599,7 @@ def pestana_historia(d: dict, c: dict) -> None:
     recorrido(d, c)
     hoy(d)
     lo_que_no_se_ve(d, c)
+    resumen_historia(d, c)
     st.html('<div class="seccion" aria-hidden="true"></div>')
     st.html('<p class="alcance">Este sitio muestra únicamente lo que se observa en las fotos de la cámara; no informa '
             'presupuesto, plazos ni porcentaje de avance de la obra. El detalle de cada día y el método están en las '
@@ -1478,6 +1887,80 @@ def datos_calendario(dias: pd.DataFrame, c: dict, modo: str, primera: str | None
             "primera": primera, "segunda": segunda, "dia": dia}
 
 
+# Lista de hitos (resumen al final de la historia y lista completa en «Explorar y verificar»):
+# un elemento por hito con número, título, fechas y claridad, y un botón «Ver en detalle» que
+# deja ese par de fechas en el comparador. En la lista completa se agregan vista y descripción.
+HITOS_CSS = """
+.lh { font-family: var(--st-font, sans-serif); color: var(--st-text-color); list-style: none; margin: 0; padding: 0; }
+.lh li { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto; column-gap: 0.75rem; row-gap: 0.15rem;
+  align-items: center; padding: 0.45rem 0; border-top: 1px solid var(--borde); }
+.lh li:last-child { border-bottom: 1px solid var(--borde); }
+.lh .n { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; align-self: start; padding-top: 0.15rem; }
+.lh .linea { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.6rem; min-width: 0; line-height: 1.35; }
+.lh .linea b { font-weight: 700; }
+.lh .meta { font-size: 0.88rem; opacity: 0.78; white-space: nowrap; }
+.lh .clar { font-size: 0.85rem; white-space: nowrap; padding: 0.15rem 0.55rem; border: 1px solid var(--borde); border-radius: 999px; }
+.lh .desc { grid-column: 2 / 3; font-size: 0.93rem; line-height: 1.45; margin: 0.15rem 0 0; opacity: 0.9; }
+.lh button { min-height: 44px; padding: 0 0.85rem; border-radius: 0.6rem; border: 1px solid var(--borde); background: transparent;
+  color: inherit; font: 600 0.9rem/1 var(--st-font, sans-serif); cursor: pointer; white-space: nowrap; grid-column: 3; grid-row: 1; }
+.lh button:hover { border-color: var(--st-text-color); }
+.lh button:focus-visible { outline: 3px solid var(--st-text-color); outline-offset: 2px; }
+.lh.tabla li { align-items: start; padding: 0.7rem 0; }
+@media (max-width: 560px) {
+  .lh li { grid-template-columns: 1.6rem minmax(0, 1fr); }
+  .lh button { grid-column: 2; grid-row: auto; justify-self: start; margin-top: 0.3rem; }
+  .lh .desc { grid-column: 2; }
+}
+"""
+
+HITOS_JS = """
+export default function (component) {
+  const { data, parentElement, setTriggerValue } = component;
+  parentElement.querySelectorAll('.lh').forEach((e) => e.remove());
+  const raiz = document.createElement('ol');
+  raiz.className = 'lh ' + data.modo;
+  raiz.setAttribute('aria-label', data.titulo);
+  raiz.style.setProperty('--borde', data.borde);
+  parentElement.appendChild(raiz);
+  raiz.innerHTML = data.hitos.map((h, k) => '<li><span class="n" aria-hidden="true">' + h.n + '</span>' +
+    '<div class="linea"><b>' + h.titulo + '</b><span class="meta">' + h.meta + '</span>' +
+    (h.clar ? '<span class="clar">' + h.clar + '</span>' : '') + '</div>' +
+    (h.desc ? '<p class="desc">' + h.desc + '</p>' : '') +
+    '<button type="button" data-k="' + k + '" aria-label="' + h.detalle.aria + '">Ver en detalle →</button></li>').join('');
+  raiz.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+    const h = data.hitos[Number(b.dataset.k)];
+    setTriggerValue('detalle', { a: h.detalle.a, b: h.detalle.b, texto: h.detalle.texto });
+  }));
+  return () => raiz.remove();
+}
+"""
+
+hitos_componente = st.components.v2.component("lista_hitos", css=HITOS_CSS, js=HITOS_JS)
+
+
+def mostrar_hitos(d: dict, c: dict, modo: str, key: str) -> None:
+    hitos = d["hitos"]
+    filas = []
+    for h in hitos.itertuples():
+        clar = claridad(pd.Series(h._asdict()))
+        filas.append({"n": int(h.numero), "titulo": html.escape(h.titulo),
+                      "meta": rango(h.fecha_inicio, h.fecha_fin) + (f" · vista {h.vista}" if modo == "tabla" else ""),
+                      "clar": html.escape(clar) if clar else "", "detalle": detalle_hito(h),
+                      "desc": html.escape(h.descripcion) if modo == "tabla" else ""})
+    resultado = hitos_componente(data={"modo": modo, "hitos": filas, "borde": c["borde"],
+                                       "titulo": "Resumen de los cambios" if modo == "resumen" else "Lista de hitos"},
+                                 key=key, on_detalle_change=lambda: None)
+    atender_detalle(getattr(resultado, "detalle", None))
+
+
+def resumen_historia(d: dict, c: dict) -> None:
+    if d["hitos"].empty:
+        return
+    seccion("Resumen", "Los cambios, de un vistazo",
+            "Número, fechas y qué tan claro se ve cada cambio. «Ver en detalle» abre sus fotos en «Explorar y verificar».")
+    mostrar_hitos(d, c, "resumen", "resumen_hitos")
+
+
 # ============================================================================
 # Explorar y verificar
 # ============================================================================
@@ -1503,24 +1986,42 @@ def leyenda_fotos(c: dict) -> None:
             + "</div>")
 
 
+def dia_util_anterior(d: dict, f: pd.Timestamp) -> pd.Timestamp | None:
+    """Día con evidencia anterior a f en la misma vista (None si f es el primero o no es útil)."""
+    util = utiles(d["dias"])
+    if f not in util.index:
+        return None
+    antes = util[(util["fecha"] < f) & util["vista"].eq(util.loc[f, "vista"])]
+    return None if antes.empty else antes["fecha"].iloc[-1]
+
+
 def detalle_dia(d: dict, c: dict, f: pd.Timestamp) -> None:
+    """Foto del día y, debajo en celular o a la derecha en escritorio, los datos del día."""
     dia = d["dias"].set_index("fecha").loc[f]
     fotos_dia = d["fotos"][d["fotos"]["fecha"].eq(f)]
     excluidas = int(dia["fotos"] - dia["fotos_utiles"])
     st.subheader(mayuscula(fecha_larga(f, dia_semana=True)), anchor=False)
     vista = f"vista {int(dia['vista'])} de la cámara" if pd.notna(dia["vista"]) else "sin vista de la obra"
     st.html(f'<p class="bajada">{mayuscula(dia["estado"])} · {vista}</p>')
-    st.html(html_cifras([("", miles(dia["fotos"]), "", "fotos tomadas"),
-                         ("si", miles(dia["fotos_utiles"]), "", "fotos utilizables"),
-                         ("no", miles(excluidas), "", "fotos excluidas")]))
-    izq, der = st.columns([1, 1], gap="medium")
-    with izq:
+    foto, datos = st.columns([1, 1], gap="medium")
+    with foto:
         if dia["estado"] == UTIL:
             momento = pd.Timestamp(dia["fecha_hora_foto"])
-            st.image(str(APP / dia["foto"]), width="stretch", alt=alt_foto(momento),
-                     caption=f"Foto del día (la utilizable más cercana a las 12:00): {hora(momento)}")
+            mostrar_foto(dia["foto"], momento, f"Foto del día (la utilizable más cercana a las 12:00): {hora(momento)}. "
+                                               "Toque la foto para ampliarla.", c, key=f"foto_{f.date()}")
         else:
             st.info("Este día no tiene foto del día: ninguna foto es utilizable.", icon="ℹ️")
+    with datos:
+        st.html(html_cifras([("", miles(dia["fotos"]), "", "fotos tomadas"),
+                             ("si", miles(dia["fotos_utiles"]), "", "utilizables"),
+                             ("no", miles(excluidas), "", "excluidas")], "tres"))
+        if excluidas:
+            filas = "".join(f"<tr><td>{nombre}<br><span class='tenue'>{criterio}</span></td><td class='n'>{int(dia[col])}</td></tr>"
+                            for col, nombre, criterio in MOTIVOS if dia[col])
+            st.html(f"<div class='envoltura'><table class='tabla'><caption>Motivos de exclusión</caption><thead><tr>"
+                    f"<th>Criterio de exclusión</th><th class='n'>Fotos</th></tr></thead><tbody>{filas}</tbody></table></div>")
+        else:
+            st.markdown("Ninguna foto excluida." if dia["fotos"] else "La cámara no envió fotos este día.")
         idx = d["indice"][d["indice"]["fecha"].eq(f)]
         if len(idx) and pd.notna(idx.iloc[0]["indice"]):
             r = idx.iloc[0]
@@ -1532,14 +2033,11 @@ def detalle_dia(d: dict, c: dict, f: pd.Timestamp) -> None:
             motivo = ("es el primer día de su vista" if r["registro"] == "referencia"
                       else "no se pudo alinear con el día con evidencia anterior")
             st.markdown(f"**Índice de cambio visual:** sin valor; {motivo}.")
-    with der:
-        if excluidas:
-            filas = "".join(f"<tr><td>{nombre}<br><span class='tenue'>{criterio}</span></td><td class='n'>{int(dia[col])}</td></tr>"
-                            for col, nombre, criterio in MOTIVOS if dia[col])
-            st.html(f"<div class='envoltura'><table class='tabla'><caption>Motivos de exclusión</caption><thead><tr>"
-                    f"<th>Criterio de exclusión</th><th class='n'>Fotos</th></tr></thead><tbody>{filas}</tbody></table></div>")
-        else:
-            st.markdown("Ninguna foto excluida." if dia["fotos"] else "La cámara no envió fotos este día.")
+        anterior = dia_util_anterior(d, f)
+        if anterior is not None:
+            par = (f"{anterior:%Y-%m-%d}", f"{f:%Y-%m-%d}")
+            st.button(f"Comparar con el {fecha(anterior)} (día con evidencia anterior) ↓", key="comparar_anterior",
+                      on_click=ir_a_detalle, args=(par[1], par, f"Comparador con el {fecha(anterior)} y el {fecha(f)}."))
     if len(fotos_dia):
         st.markdown("**Fotos por hora**")
         leyenda_fotos(c)
@@ -1555,9 +2053,13 @@ def detalle_dia(d: dict, c: dict, f: pd.Timestamp) -> None:
 def dia_por_dia(d: dict, c: dict) -> None:
     dias = d["dias"]
     seccion("Día por día", "Detalle de cualquier día",
-            "Fotos tomadas, fotos utilizables, motivos de exclusión y foto del día.")
+            "Elija un día en el calendario: foto del día, fotos tomadas y utilizables, motivos de exclusión e índice de "
+            "cambio.", id_="detalle-dia")
+    aviso_de_detalle("detalle-dia")
     validas = set(dias["fecha"].dt.strftime("%Y-%m-%d"))
     actual = st.session_state.get("dia_explora", utiles(dias)["fecha"].iloc[-1].strftime("%Y-%m-%d"))
+    if actual not in validas:
+        actual = utiles(dias)["fecha"].iloc[-1].strftime("%Y-%m-%d")
     resultado = calendario_componente(data=datos_calendario(dias, c, "dia", dia=actual), key="calendario_dia",
                                       on_dia_change=lambda: None)
     nuevo = getattr(resultado, "dia", None)
@@ -1570,16 +2072,24 @@ def dia_por_dia(d: dict, c: dict) -> None:
 def comparar(d: dict, c: dict) -> None:
     dias = d["dias"]
     seccion("Comparar", "Compare dos días cualquiera",
-            "Elija dos días con foto útil. Dentro de una misma vista de la cámara las fotos se alinean para corregir el "
-            "corrimiento diario de la cámara.")
+            "Dos días con foto útil; las fechas se cambian en el calendario de abajo. Dentro de una misma vista de la "
+            "cámara las fotos se alinean para corregir el corrimiento diario de la cámara.", id_="comparar")
+    aviso_de_detalle("comparar")
     util = utiles(dias)
     validas = set(util.index.strftime("%Y-%m-%d"))
     primera_vista = util[util["vista"].eq(util["vista"].iloc[0])]
     por_defecto = (primera_vista.index[0].strftime("%Y-%m-%d"), primera_vista.index[-1].strftime("%Y-%m-%d"))
-    actual = st.session_state.get("fechas_explora", por_defecto)
+    actual = tuple(st.session_state.get("fechas_explora", por_defecto))
     if not (set(actual) <= validas and actual[0] < actual[1]):
         actual = por_defecto
     st.session_state.fechas_explora = actual
+    # Primero el resultado (las dos fotos) y después el calendario para cambiar las fechas
+    a, b = util.loc[pd.Timestamp(actual[0])], util.loc[pd.Timestamp(actual[1])]
+    mostrar_comparacion(d, c, a, b)
+    entre = d["hitos"][(d["hitos"]["fecha_fin"] > a["fecha"]) & (d["hitos"]["fecha_inicio"] < b["fecha"])]
+    if len(entre):
+        st.markdown("Hitos entre estas fechas: " + "; ".join(f"{h.numero}. {minuscula(h.titulo)}" for h in entre.itertuples()) + ".")
+    st.markdown("**Cambiar las fechas**")
     resultado = calendario_componente(data=datos_calendario(dias, c, "elegir", *actual), key="calendario_explora",
                                       on_fechas_change=lambda: None)
     nuevas = getattr(resultado, "fechas", None)
@@ -1588,33 +2098,17 @@ def comparar(d: dict, c: dict) -> None:
         if par != actual and set(par) <= validas and par[0] != par[1]:
             st.session_state.fechas_explora = par
             st.rerun()
-    a, b = util.loc[pd.Timestamp(actual[0])], util.loc[pd.Timestamp(actual[1])]
-    mostrar_comparacion(d, c, a, b)
-    entre = d["hitos"][(d["hitos"]["fecha_fin"] > a["fecha"]) & (d["hitos"]["fecha_inicio"] < b["fecha"])]
-    if len(entre):
-        st.markdown("Hitos entre estas fechas: " + "; ".join(f"{h.numero}. {minuscula(h.titulo)}" for h in entre.itertuples()) + ".")
 
 
 def lista_hitos(d: dict, c: dict) -> None:
     hitos = d["hitos"]
     seccion("Hitos", f"Los {len(hitos)} cambios identificados y su claridad" if len(hitos) else "Sin hitos identificados",
             "Se identificaron a mano, comparando una foto por semana y luego una por día. La claridad la asignó el "
-            "equipo al revisar las dos fotos a tamaño completo.")
+            "equipo al revisar las dos fotos a tamaño completo. «Ver en detalle» lleva el par de fotos al comparador.")
     if hitos.empty:
         return
-    filas = "".join(
-        f"<tr><td class='n'>{h.numero}</td><td><b>{html.escape(h.titulo)}</b><br>"
-        f"<span class='tenue'>{rango(h.fecha_inicio, h.fecha_fin)} · vista {h.vista}</span><br>{html.escape(h.descripcion)}</td>"
-        f"<td style='white-space:nowrap'>{claridad(pd.Series(h._asdict())) or '—'}</td></tr>" for h in hitos.itertuples())
-    st.html(f"<div class='envoltura'><table class='tabla'><thead><tr><th class='n'>N.º</th><th>Hito, fechas y descripción</th>"
-            f"<th>Claridad</th></tr></thead><tbody>{filas}</tbody></table></div>")
+    mostrar_hitos(d, c, "tabla", "lista_hitos")
     st.caption(" · ".join(f"**{mayuscula(k)}:** {v}" for k, v in CRITERIO_CLARIDAD.items()))
-    opciones = {f"{h.numero}. {h.titulo} ({rango(h.fecha_inicio, h.fecha_fin)})": h.numero for h in hitos.itertuples()}
-    elegido = st.selectbox("Ver las fotos de un hito", list(opciones), key="hito_explora")
-    h = hitos[hitos["numero"].eq(opciones[elegido])].iloc[0]
-    dias = d["dias"].set_index("fecha", drop=False)
-    a, b = dias.loc[h["fecha_hora_antes"].normalize()], dias.loc[h["fecha_hora_despues"].normalize()]
-    mostrar_comparacion(d, c, a, b, f"Antes · {fecha(a['fecha'])}", f"Después · {fecha(b['fecha'])}")
 
 
 def pestana_explorar(d: dict, c: dict) -> None:
@@ -1624,6 +2118,9 @@ def pestana_explorar(d: dict, c: dict) -> None:
     dia_por_dia(d, c)
     comparar(d, c)
     lista_hitos(d, c)
+    destino = st.session_state.pop("desplazar", None)
+    if destino:
+        desplazar_componente(data=destino, key="desplazar")
 
 
 # ============================================================================
@@ -1725,6 +2222,19 @@ def grafico_indice(d: dict, c: dict) -> go.Figure:
     return fig
 
 
+def ver_pico(d: dict) -> None:
+    """Callback de los botones de picos: lleva el par (día anterior, pico) a «Explorar y verificar»."""
+    elegido = st.session_state.get("pico_detalle")
+    st.session_state.pico_detalle = None
+    if not elegido:
+        return
+    f = pd.Timestamp(elegido)
+    r = d["indice"][d["indice"]["fecha"].eq(f)].iloc[0]
+    ir_a_detalle(elegido, (f"{r['fecha_anterior']:%Y-%m-%d}", elegido),
+                 f"Pico del índice de cambio del {fecha(f)} ({decimal(r['indice'])} %), comparado con el "
+                 f"{fecha(r['fecha_anterior'])}. Active «Mostrar dónde cambió» para ver las zonas detectadas.")
+
+
 def indice_cambio(d: dict, c: dict) -> None:
     indice, hitos = d["indice"], d["hitos"]
     val, esperado = validacion(indice, hitos)
@@ -1736,7 +2246,24 @@ def indice_cambio(d: dict, c: dict) -> None:
             f"El índice marca {coinciden} de {len(val)} hitos; por azar marcaría unos {esperado:.0f}",
             "Mide qué parte de la imagen cambió respecto del día con evidencia anterior. Sirve como alerta para revisar "
             "días concretos, no para identificar cambios por sí solo.")
-    st.plotly_chart(grafico_indice(d, c), width="stretch", config={"displayModeBar": False}, key="indice")
+    st.html('<p class="solo-celular">Para revisar con detalle se recomienda una computadora o el teléfono en horizontal; '
+            'el gráfico se puede desplazar hacia los lados.</p>')
+    seleccion = st.plotly_chart(grafico_indice(d, c), width="stretch", config={"displayModeBar": False}, key="indice",
+                                on_select="rerun", selection_mode="points")
+    puntos = (seleccion or {}).get("selection", {}).get("points", []) if hasattr(seleccion, "get") else []
+    if puntos:
+        f = pd.Timestamp(str(puntos[0].get("x"))[:10])
+        fila = con[con["fecha"].eq(f)]
+        if len(fila):
+            r = fila.iloc[0]
+            ir_a_detalle(f"{f:%Y-%m-%d}", (f"{r['fecha_anterior']:%Y-%m-%d}", f"{f:%Y-%m-%d}"),
+                         f"Día {fecha(f)} del índice de cambio ({decimal(r['indice'])} %), comparado con el "
+                         f"{fecha(r['fecha_anterior'])}.")
+            st.rerun()
+    opciones = {f"{r.fecha:%Y-%m-%d}": f"{fecha(r.fecha, anio=False)} · {decimal(r.indice)} %"
+                for r in picos.sort_values("fecha").itertuples()}
+    st.pills("Ver un pico en detalle (abre el par de fotos en «Explorar y verificar»; también puede tocar una barra)",
+             list(opciones), format_func=lambda k: opciones[k], key="pico_detalle", on_change=ver_pico, args=(d,))
     st.caption("Bandas azules numeradas: ventana de cada hito (de la foto de antes a la de después). Línea punteada "
                "horizontal: umbral de pico de cada vista.")
     sin = indice[indice["indice"].isna()]
@@ -1856,13 +2383,21 @@ def main() -> None:
     d = {**d, "c": c}
     estilos(c)
     franja(d["dias"])
-    historia, explorar, datos = st.tabs(["La historia", "Explorar y verificar", "Datos y método"])
-    with historia:
-        pestana_historia(d, c)
-    with explorar:
-        pestana_explorar(d, c)
-    with datos:
-        pestana_datos(d, c)
+    # Pestañas con estado (key + on_change) y sincronizadas con la URL (?pestana=...): así
+    # «Ver en detalle» puede cambiar de pestaña y un enlace abre directamente una de ellas. Solo
+    # se dibuja la pestaña abierta.
+    if "ir_pestana" in st.session_state:
+        st.session_state.pestana = st.session_state.pop("ir_pestana")
+    historia, explorar, datos = st.tabs(PESTANAS, key="pestana", on_change="rerun", bind="query-params")
+    if historia.open:
+        with historia:
+            pestana_historia(d, c)
+    if explorar.open:
+        with explorar:
+            pestana_explorar(d, c)
+    if datos.open:
+        with datos:
+            pestana_datos(d, c)
 
 
 main()
